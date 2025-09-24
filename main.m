@@ -1,3 +1,4 @@
+% Author: reda-kamal
 %% Three-domain Stefan problem with finite contact resistance
 %  VAM calibrations (early, late) vs explicit constant-Rc solver
 %  Plots per case: profiles, profile difference, heff(t), interface flux q(t)

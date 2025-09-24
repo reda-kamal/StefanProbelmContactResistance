@@ -6,13 +6,23 @@ packages so they can run in restricted environments.
 
 ## Running the demo
 
-From the repository root run:
+The plotting helpers rely on `matplotlib` for figure creation.  If it is not
+available the solver still runs, but it will emit a warning and skip the figures.
+
+From the repository root you can either execute the package module:
 
 ```bash
 python -m python.main
 ```
 
-The script executes the water/ice and tin/sapphire scenarios with a coarse grid so
-it finishes quickly and prints the interface locations and contact heat flux for the
-explicit and enthalpy solvers.  The dictionaries returned by `run_vam_case` contain
-all intermediate fields if deeper analysis is required.
+or run the script directly (useful for IDEs such as PyCharm):
+
+```bash
+python python/main.py
+```
+
+Both entry points execute the water/ice and tin/sapphire scenarios, emit a short
+text summary, and open four matplotlib figures per case (temperature profiles,
+profile difference, effective conductance, and interface heat flux).  The
+dictionaries returned by `run_vam_case` still contain all intermediate fields if
+deeper analysis is required.

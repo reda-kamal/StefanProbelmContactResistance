@@ -3,11 +3,18 @@ from __future__ import annotations
 import math
 from typing import Dict, List
 
-from .numerics import fsolve2
-from .stefan_eqs import stefan_eqs
-from .options import get_opt
-from .explicit_stefan_snapshot import explicit_stefan_snapshot
-from .enthalpy_stefan_snapshot import enthalpy_stefan_snapshot
+try:
+    from .numerics import fsolve2
+    from .stefan_eqs import stefan_eqs
+    from .options import get_opt
+    from .explicit_stefan_snapshot import explicit_stefan_snapshot
+    from .enthalpy_stefan_snapshot import enthalpy_stefan_snapshot
+except ImportError:  # pragma: no cover - allow running as a loose script
+    from numerics import fsolve2  # type: ignore
+    from stefan_eqs import stefan_eqs  # type: ignore
+    from options import get_opt  # type: ignore
+    from explicit_stefan_snapshot import explicit_stefan_snapshot  # type: ignore
+    from enthalpy_stefan_snapshot import enthalpy_stefan_snapshot  # type: ignore
 
 
 class CaseResult(dict):
@@ -109,7 +116,8 @@ def run_vam_case(label: str, k_w: float, rho_w: float, c_w: float,
         'S0_e': S0_e, 'E0_e': E0_e, 't0_e': t0_e,
         'S0_l': S0_l, 'E0_l': E0_l, 't0_l': t0_l,
         'alpha_w': alpha_w, 'alpha_s': alpha_s, 'alpha_l': alpha_l,
-        'Se': Se, 'Sl': Sl
+        'Se': Se, 'Sl': Sl,
+        'k_w': k_w, 'k_s': k_s, 'k_l': k_l,
     }
 
     snap_explicit = explicit_stefan_snapshot(k_w, rho_w, c_w, M, R_c, t_phys, params_struct, explicit_opts)

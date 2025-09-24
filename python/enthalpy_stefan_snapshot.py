@@ -3,8 +3,12 @@ from __future__ import annotations
 import math
 from typing import Dict, List, Tuple
 
-from .options import get_opt, get_struct
-from .numerics import moving_average
+try:
+    from .options import get_opt, get_struct
+    from .numerics import moving_average
+except ImportError:  # pragma: no cover - allow running as a loose script
+    from options import get_opt, get_struct  # type: ignore
+    from numerics import moving_average  # type: ignore
 
 
 class Snapshot(dict):

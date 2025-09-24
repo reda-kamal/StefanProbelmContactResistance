@@ -1,10 +1,32 @@
 """Python driver for the three-domain Stefan problem with contact resistance."""
 from __future__ import annotations
 
-from .run_vam_case import run_vam_case
+import pathlib
+import sys
+
+try:
+    from .run_vam_case import run_vam_case
+    from .plotting import (
+        plot_conductance,
+        plot_diff_profile,
+        plot_flux,
+        plot_profiles,
+    )
+except ImportError:  # pragma: no cover - support running directly via PyCharm/CLI
+    if __package__ is None or __package__ == "":
+        package_dir = pathlib.Path(__file__).resolve().parent
+        if str(package_dir) not in sys.path:
+            sys.path.append(str(package_dir))
+    from run_vam_case import run_vam_case  # type: ignore[no-redef]
+    from plotting import (  # type: ignore[no-redef]
+        plot_conductance,
+        plot_diff_profile,
+        plot_flux,
+        plot_profiles,
+    )
 
 
-def main() -> None:
+def main(show_plots: bool = True) -> None:
     t_phys = 0.02
     R_c = 2e-5
 
@@ -43,7 +65,8 @@ def main() -> None:
     caseA = run_vam_case('Water/Ice + Sapphire', k_w, rho_w, c_w, A, R_c, t_phys, sim_opts)
     caseB = run_vam_case('Tin (liq/sol) + Sapphire', k_w, rho_w, c_w, B, R_c, t_phys, sim_opts)
 
-    for case in (caseA, caseB):
+    cases = (caseA, caseB)
+    for case in cases:
         print(f"=== {case['label']} ===")
         params = case['params']
         print(f"lambda = {params['lam']:.5f}, Ti = {params['Ti']:.3f} C")
@@ -55,6 +78,20 @@ def main() -> None:
             final_t = t_hist[-1] if t_hist else float('nan')
             print(f"  {method:9s} : S = {snap['S']:.6f} m at t={final_t:.4f} s, q={final_q:.2f} W/m^2")
         print()
+
+    for case in cases:
+        plot_profiles(case)
+        plot_diff_profile(case)
+        plot_conductance(case, R_c, 0.1)
+        plot_flux(case, R_c, 0.1)
+
+    if show_plots:
+        try:
+            import matplotlib.pyplot as plt  # type: ignore
+        except ImportError:
+            print("matplotlib not available; skipping interactive figures.")
+        else:
+            plt.show()
 
     print("Simulation complete. Inspect case dictionaries for detailed data.")
 

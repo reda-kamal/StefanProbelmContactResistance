@@ -27,7 +27,14 @@ function plot_flux(caseX, R_c, t_max)
     figure('Name',['Interface flux vs time — ',caseX.label]); hold on; grid on; box on;
     plot(t, q0_rc, 'k--','LineWidth',1.6, 'DisplayName','VAM^{(0)}: q=\Delta T/R_c');
     plot(t, qI_rc, 'b-' ,'LineWidth',1.7, 'DisplayName','VAM^{(\infty)}: q=\Delta T/R_c');
-    plot(th, qh,  '-',  'LineWidth',1.6, 'Color',[0.95 0.65 0.2], 'DisplayName','Explicit (const R_c)');
+
+    explicit_label = 'Explicit (const R_c)';
+    if isfield(caseX, 'num') && isfield(caseX.num, 'history') && ...
+            isfield(caseX.num.history, 'flux_window') && caseX.num.history.flux_window > 1
+        explicit_label = sprintf('Explicit (const R_c, %d-pt mov. avg.)', ...
+            caseX.num.history.flux_window);
+    end
+    plot(th, qh,  '-',  'LineWidth',1.6, 'Color',[0.95 0.65 0.2], 'DisplayName',explicit_label);
     if seed_t > 0
         xline(seed_t, 'Color',[0.4 0.4 0.4], 'LineStyle',':', 'LineWidth',1.0, ...
             'DisplayName','Seed time for explicit IC');

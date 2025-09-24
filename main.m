@@ -20,11 +20,20 @@ R_c    = 2e-5;                % contact resistance [m^2 K/W] (shared across case
 
 % Explicit finite-difference snapshot controls (passed to explicit solver)
 explicit_opts = struct( ...
-    'CFL',            0.30, ...   % stability number for FTCS updates
-    'nodes_per_diff', 200, ...    % wall/liquid nodes per 5*sqrt(alpha*t) domain
-    'min_cells',      400, ...    % minimum nodes per semi-infinite side
-    'min_seed_cells', 1,   ...    % number of initial solid cells at the interface
-    'nsave',          2000 ...    % history samples retained for flux output
+    'CFL',            0.30, ...    % stability number for FTCS updates
+    'wall',           struct( ...  % wall mesh: physical extent & resolution
+                           'length', 7.5e-3, ...   % [m] domain size
+                           'cells',  600 ...       % number of uniform cells
+                           ), ...
+    'fluid',          struct( ...  % solid+liquid mesh controls
+                           'length', 8.0e-3, ...   % [m] domain size for fluid side
+                           'cells',  800, ...      % uniform cells across solid+liquid
+                           'min_cells', 500 ...    % guard minimum when overriding opts
+                           ), ...
+    'min_seed_cells', 1, ...       % initial solid thickness in cell units
+    'history_dt',     2.5e-4, ...  % seconds between saved flux samples (approx.)
+    'flux_smoothing', 5, ...       % odd moving-average window for q(t)
+    'nsave',          4000 ...     % fallback when history_dt <= 0
     );
 
 % Profile plotting mesh density (points per segment between breakpoints)

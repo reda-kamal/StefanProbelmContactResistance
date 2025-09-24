@@ -5,8 +5,18 @@ function snap = explicit_stefan_snapshot(k_w,rho_w,c_w, M, R_c, t_end, params, o
 % x=S(t): Ts=Tl=Tf at the face; Stefan law with one-sided slopes.
 % Far field: Tw(-Lw)=Tw_inf, Tl(Lf)=Tl_inf
 % OPTS is an optional struct supporting fields:
-%   CFL, nodes_per_diff, min_cells, domain_factor, min_seed_cells,
-%   min_length, nsave
+%   CFL              - explicit stability number (default 0.30)
+%   wall             - struct with wall mesh controls:
+%                        length [m], dx [m], cells, extent_factor, min_length
+%   fluid            - struct with solid/liquid mesh controls (same fields)
+%   min_cells        - legacy fallback for both domains (default 400)
+%   nodes_per_diff   - legacy heuristic for # nodes per diffusion length
+%   domain_factor    - legacy fallback for extent_factor (default 5)
+%   min_length       - legacy fallback for domain length (default 2e-3 m)
+%   min_seed_cells   - # of solid cells to seed at the interface (default 1)
+%   nsave            - max stored history points if history_dt unused (2000)
+%   history_dt       - desired spacing of saved flux samples [s] (optional)
+%   flux_smoothing   - odd window length for moving-average smoothing
 
     if nargin < 7
         error('explicit_stefan_snapshot:MissingParams', ...
@@ -42,24 +52,103 @@ mu     = params.mu;
 % This avoids the "no-solid" start of the analytic solution while keeping the
 % numerical domain consistent with the VAM calibration.
 
-% Resolution tuned by nodes-per-diffusion-length (reduces work v. fixed 2000)
-nodes_per_diff = get_opt(opts, 'nodes_per_diff', 200);
-min_cells      = get_opt(opts, 'min_cells', 400);
-domain_factor  = get_opt(opts, 'domain_factor', 5);
-min_seed_cells = get_opt(opts, 'min_seed_cells', 1);
-min_length     = get_opt(opts, 'min_length', 2e-3);
-nsave          = get_opt(opts, 'nsave', 2000);
+% Mesh/temporal controls (user-friendly fields override legacy heuristics)
+nodes_per_diff = get_opt(opts, 'nodes_per_diff', []);
+min_cells_legacy = get_opt(opts, 'min_cells', 400);
+domain_factor = get_opt(opts, 'domain_factor', 5);
+min_length_legacy = get_opt(opts, 'min_length', 2e-3);
 
-Nw = max(ceil(nodes_per_diff*domain_factor), min_cells);
-Nf = max(ceil(nodes_per_diff*domain_factor), min_cells);
+wall_opts  = get_opt(opts, 'wall', struct());
+fluid_opts = get_opt(opts, 'fluid', struct());
+
+min_seed_cells = get_opt(opts, 'min_seed_cells', get_opt(fluid_opts, 'min_seed_cells', 1));
+nsave          = get_opt(opts, 'nsave', 2000);
+history_dt     = get_opt(opts, 'history_dt', 0);
+flux_window    = get_opt(opts, 'flux_smoothing', 0);
+if flux_window > 1
+    flux_window = floor(flux_window);
+    if mod(flux_window,2) == 0
+        flux_window = flux_window + 1;
+    end
+end
+
+% Domain extents (default to multiples of the diffusion length unless
+% overridden explicitly)
+wall_extent_factor = get_opt(wall_opts, 'extent_factor', domain_factor);
+fluid_extent_factor = get_opt(fluid_opts, 'extent_factor', domain_factor);
+
+wall_min_length = get_opt(wall_opts, 'min_length', min_length_legacy);
+fluid_min_length = get_opt(fluid_opts, 'min_length', min_length_legacy);
+
+wall_length_user = get_opt(wall_opts, 'length', get_opt(wall_opts, 'extent', []));
+wall_length_fixed = ~isempty(wall_length_user);
+if wall_length_fixed
+    wall_length = max(wall_length_user, wall_min_length);
+else
+    wall_length = max(wall_extent_factor*sqrt(aw*t_final_phys), wall_min_length);
+end
+
+fluid_length_user = get_opt(fluid_opts, 'length', get_opt(fluid_opts, 'extent', []));
+fluid_length_fixed = ~isempty(fluid_length_user);
+if fluid_length_fixed
+    fluid_length = max(fluid_length_user, fluid_min_length);
+else
+    fluid_length = max(fluid_extent_factor*sqrt(max(as,al)*t_final_phys), fluid_min_length);
+end
+
+wall_min_cells = get_opt(wall_opts, 'min_cells', min_cells_legacy);
+fluid_min_cells = get_opt(fluid_opts, 'min_cells', min_cells_legacy);
+
+wall_cells = get_opt(wall_opts, 'cells', []);
+if isempty(wall_cells)
+    wall_dx = get_opt(wall_opts, 'dx', []);
+    if ~isempty(wall_dx) && wall_dx > 0
+        wall_cells = max(3, round(wall_length / wall_dx));
+    else
+        wall_cells = wall_min_cells;
+        if ~isempty(nodes_per_diff)
+            wall_cells = max(wall_cells, ceil(nodes_per_diff * wall_extent_factor));
+        end
+    end
+else
+    wall_cells = max(3, round(wall_cells));
+end
+wall_cells = max(wall_cells, wall_min_cells);
+
+fluid_cells = get_opt(fluid_opts, 'cells', []);
+if isempty(fluid_cells)
+    fluid_dx = get_opt(fluid_opts, 'dx', []);
+    if ~isempty(fluid_dx) && fluid_dx > 0
+        fluid_cells = max(3, round(fluid_length / fluid_dx));
+    else
+        fluid_cells = fluid_min_cells;
+        if ~isempty(nodes_per_diff)
+            fluid_cells = max(fluid_cells, ceil(nodes_per_diff * fluid_extent_factor));
+        end
+    end
+else
+    fluid_cells = max(3, round(fluid_cells));
+end
+fluid_cells = max(fluid_cells, fluid_min_cells);
+
+Nw = wall_cells;
+Nf = fluid_cells;
 
 % Fixed-point iteration to align the seed time (one full solid cell) and the
 % truncation lengths used for the semi-infinite domains.
 seed_time = 0;
 t_final_phys = t_end;
 for iter = 1:5
-    Lw = max(domain_factor*sqrt(aw*t_final_phys), min_length);
-    Lf = max(domain_factor*sqrt(max(as,al)*t_final_phys), min_length);
+    if wall_length_fixed
+        Lw = wall_length;
+    else
+        Lw = max(wall_length, wall_extent_factor*sqrt(aw*t_final_phys));
+    end
+    if fluid_length_fixed
+        Lf = fluid_length;
+    else
+        Lf = max(fluid_length, fluid_extent_factor*sqrt(max(as,al)*t_final_phys));
+    end
     dxw = Lw/Nw;   xw = -((1:Nw)' - 0.5)*dxw;  % 0^- at +dxw/2
     dxf = Lf/Nf;   xf =  ((1:Nf)' - 0.5)*dxf;  % 0^+ at +dxf/2
 
@@ -78,8 +167,14 @@ end
 
 seed_time = max(seed_time, 0);
 t_final_phys = max(t_end, seed_time);
-Lw = max(domain_factor*sqrt(aw*t_final_phys), min_length);
-Lf = max(domain_factor*sqrt(max(as,al)*t_final_phys), min_length);
+if ~wall_length_fixed
+    wall_length = max(wall_length, wall_extent_factor*sqrt(aw*t_final_phys));
+end
+if ~fluid_length_fixed
+    fluid_length = max(fluid_length, fluid_extent_factor*sqrt(max(as,al)*t_final_phys));
+end
+Lw = wall_length;
+Lf = fluid_length;
 dxw = Lw/Nw;   xw = -((1:Nw)' - 0.5)*dxw;
 dxf = Lf/Nf;   xf =  ((1:Nf)' - 0.5)*dxf;
 seed_thickness = min_seed_cells * dxf;
@@ -125,10 +220,11 @@ seed_info.duration = sim_duration;
 % Explicit time step (CFL)
 CFL = get_opt(opts, 'CFL', 0.3);
 dt_base = CFL * min( dxw^2/(2*aw), dxf^2/(2*max(as,al)) );
-nsteps = max(1, ceil(sim_duration/dt_base));
-if sim_duration == 0
+if sim_duration <= 0
+    nsteps = 0;
     dt_base = 0;
 else
+    nsteps = max(1, ceil(sim_duration/dt_base));
     dt_base = min(dt_base, sim_duration/nsteps);
 end
 t  = 0;
@@ -139,12 +235,30 @@ coeff = local_coeffs(dt_base, aw, as, al, dxw, dxf);
 curr_dt = dt_base;
 
 % history buffers (downsampled only)
-stride = max(1, floor(nsteps/nsave));
-t_hist = zeros(ceil(nsteps/stride),1);
-q_hist = zeros(ceil(nsteps/stride),1);
-Tw_face_hist = zeros(ceil(nsteps/stride),1);
-Ts_face_hist = zeros(ceil(nsteps/stride),1);
+if history_dt > 0
+    n_hist_max = max(2, ceil(sim_duration/history_dt) + 2);
+    stride = 1; %#ok<NASGU>
+else
+    stride = max(1, max(1, floor(max(nsteps,1)/max(nsave,1))));
+    n_hist_max = max(2, ceil(max(nsteps,1)/stride) + 1);
+end
+t_hist = zeros(n_hist_max,1);
+q_hist = zeros(n_hist_max,1);
+Tw_face_hist = zeros(n_hist_max,1);
+Ts_face_hist = zeros(n_hist_max,1);
 ksave  = 0;
+last_save_time = -inf;
+
+% Record initial (seed) flux sample for diagnostics
+q_seed = (Tw(1) - Tfld(1)) / (Rw + R_c + Rs);
+Tw_face_seed = Tw(1) - Rw*q_seed;
+Ts_face_seed = Tfld(1) + Rs*q_seed;
+ksave = ksave + 1;
+t_hist(ksave) = t_rel;
+q_hist(ksave) = (Tw_face_seed - Ts_face_seed)/R_c;
+Tw_face_hist(ksave) = Tw_face_seed;
+Ts_face_hist(ksave) = Ts_face_seed;
+last_save_time = t_rel;
 
 for n = 1:nsteps
     if sim_duration == 0
@@ -159,9 +273,6 @@ for n = 1:nsteps
         coeff = local_coeffs(dt_step, aw, as, al, dxw, dxf);
         curr_dt = dt_step;
     end
-    t = t + dt_step;
-    t_phys = t_phys + dt_step;
-    t_rel  = t_phys - seed_time;
 
     % Adjacent face index from current continuous front
     m = max(1, min(Nf-1, floor(S_real/dxf)));
@@ -170,15 +281,6 @@ for n = 1:nsteps
     q0 = (Tw(1) - Tfld(1)) / (Rw + R_c + Rs);   % + toward +x (into fluid)
     Tw_face = Tw(1) - Rw*q0;
     Ts_face = Tfld(1) + Rs*q0;
-
-    % Save downsampled q(t)
-    if mod(n, stride)==0
-        ksave = ksave + 1;
-        t_hist(ksave) = t_rel;
-        q_hist(ksave) = (Tw_face - Ts_face)/R_c;
-        Tw_face_hist(ksave) = Tw_face;
-        Ts_face_hist(ksave) = Ts_face;
-    end
 
     % Ghosts consistent with q0
     Tghost_w = Tw(1)   - Rw*q0;   % wall face
@@ -259,6 +361,38 @@ for n = 1:nsteps
 
     S_real = S_real + dt_step * ( k_s*grad_s - k_l*grad_l ) / (rho_s*L);
     S_real = min( (Nf-1)*dxf, max( dxf, S_real ) );
+
+    % Advance clocks after the state has been updated
+    t = t + dt_step;
+    t_phys = t_phys + dt_step;
+    t_rel  = t_phys - seed_time;
+
+    % Reconstruct contact flux/temps at the updated time level
+    q1 = (Tw(1) - Tfld(1)) / (Rw + R_c + Rs);
+    Tw_face_new = Tw(1) - Rw*q1;
+    Ts_face_new = Tfld(1) + Rs*q1;
+    q_contact = (Tw_face_new - Ts_face_new)/R_c;
+
+    % Save history either on stride counts or at roughly uniform dt
+    should_save = false;
+    if history_dt > 0
+        if (t_rel - last_save_time) >= history_dt*(1 - 1e-8) || n == nsteps
+            should_save = true;
+        end
+    else
+        if mod(n, stride)==0 || n == nsteps
+            should_save = true;
+        end
+    end
+
+    if should_save
+        ksave = ksave + 1;
+        t_hist(ksave) = t_rel;
+        q_hist(ksave) = q_contact;
+        Tw_face_hist(ksave) = Tw_face_new;
+        Ts_face_hist(ksave) = Ts_face_new;
+        last_save_time = t_rel;
+    end
 end
 
 % Pack snapshot
@@ -270,6 +404,10 @@ snap.t   = t_end;
 snap.t_rel = t_rel;
 snap.t_offset = seed_time;
 snap.seed = seed_info;
+snap.grid = struct('dx_wall',dxw,'dx_fluid',dxf,'N_wall',Nw,'N_fluid',Nf,...
+    'L_wall',Lw,'L_fluid',Lf);
+snap.history = struct('history_dt',history_dt,'flux_window',flux_window,...
+    'nsave',nsave);
 
 % Trim history to what we actually saved
 t_hist = t_hist(1:ksave);
@@ -279,6 +417,11 @@ snap.q.val = q_hist;
 snap.q.Tw_face = Tw_face_hist(1:ksave);
 snap.q.Ts_face = Ts_face_hist(1:ksave);
 snap.q.t_phys = t_hist + seed_time;
+
+% Optional moving-average smoothing of the stored flux (for plotting only)
+if flux_window > 1
+    snap.q.val = moving_average(snap.q.val, flux_window);
+end
 end
 
 function coeff = local_coeffs(dt, aw, as, al, dxw, dxf)
@@ -302,4 +445,24 @@ function val = get_opt(opts, field, default)
     else
         val = default;
     end
+end
+
+function y = moving_average(y, window)
+%MOVING_AVERAGE Simple centered moving average with odd window length.
+    n = numel(y);
+    window = max(1, floor(window));
+    if window <= 1 || n <= 2
+        return;
+    end
+    if mod(window,2) == 0
+        window = window + 1;
+    end
+    half = floor(window/2);
+    y_sm = zeros(size(y));
+    for i = 1:n
+        j0 = max(1, i-half);
+        j1 = min(n, i+half);
+        y_sm(i) = mean(y(j0:j1));
+    end
+    y = y_sm;
 end

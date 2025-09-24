@@ -73,13 +73,19 @@ function out = run_vam_case(label, k_w, rho_w, c_w, M, R_c, t_phys)
     Lw_l = 5*sqrt(alpha_w*tpl);  Ll_l = 5*sqrt(alpha_l*tpl);
     x_min = -max(Lw_e,Lw_l); x_max = max([Se,Sl]) + max(Ll_e,Ll_l);
     knots = sort([x_min, 0, Se, Sl, x_max]);
-    pts_per_seg = 1000;
-    x = [];
-    for j = 1:(numel(knots)-1)
-        a = knots(j); b = knots(j+1);
-        seg = linspace(a,b,pts_per_seg);
-        if j < (numel(knots)-1), seg = seg(1:end-1); end
-        x = [x, seg]; %#ok<AGROW>
+    pts_per_seg = 400;
+    nseg = numel(knots) - 1;
+    npts = nseg*pts_per_seg - (nseg - 1);
+    x = zeros(1, npts);
+    idx = 1;
+    for j = 1:nseg
+        seg = linspace(knots(j),knots(j+1),pts_per_seg);
+        if j < nseg
+            seg = seg(1:end-1);
+        end
+        seg_len = numel(seg);
+        x(idx:idx+seg_len-1) = seg;
+        idx = idx + seg_len;
     end
 
     % Evaluate temperatures for both VAMs at t_phys (physical space/time)
@@ -92,9 +98,11 @@ function out = run_vam_case(label, k_w, rho_w, c_w, M, R_c, t_phys)
     Te = nan(size(x));
     Iw = (x <= 0);     Is = (x > 0) & (x <= Se);   Il = (x > Se);
     Te(Iw) = Ti + (Ti - Tw_inf).* erf_safe( (x(Iw) - E0_e)./den_w_e );
-    Te(Is) = Ti + (Tf - Ti)     .* erf_safe( (x(Is) + S0_e)./den_s_e ) ./ erf_safe(lam);
+    erf_lam = erf_safe(lam);
+    Te(Is) = Ti + (Tf - Ti)     .* erf_safe( (x(Is) + S0_e)./den_s_e ) ./ erf_lam;
+    erf_mu = erf_safe(mu);
     Te(Il) = Tl_inf + (Tf - Tl_inf).* ...
-              ( erf_safe( (x(Il) + S0_e)./den_l_e ) - 1 ) ./ (erf_safe(mu) - 1);
+              ( erf_safe( (x(Il) + S0_e)./den_l_e ) - 1 ) ./ (erf_mu - 1);
 
     % Late-time
     den_w_l = 2*sqrt(alpha_w*tpl);
@@ -103,9 +111,9 @@ function out = run_vam_case(label, k_w, rho_w, c_w, M, R_c, t_phys)
     Tl = nan(size(x));
     Iw  = (x <= 0);    IsL = (x > 0) & (x <= Sl);  IlL = (x > Sl);
     Tl(Iw)  = Ti + (Ti - Tw_inf).* erf_safe( (x(Iw)  - E0_l)./den_w_l );
-    Tl(IsL) = Ti + (Tf - Ti)     .* erf_safe( (x(IsL) + S0_l)./den_s_l ) ./ erf_safe(lam);
+    Tl(IsL) = Ti + (Tf - Ti)     .* erf_safe( (x(IsL) + S0_l)./den_s_l ) ./ erf_lam;
     Tl(IlL) = Tl_inf + (Tf - Tl_inf).* ...
-               ( erf_safe( (x(IlL) + S0_l)./den_l_l ) - 1 ) ./ (erf_safe(mu) - 1);
+               ( erf_safe( (x(IlL) + S0_l)./den_l_l ) - 1 ) ./ (erf_mu - 1);
 
     % Temperature-profile difference (late - early)
     Tdiff = Tl - Te;

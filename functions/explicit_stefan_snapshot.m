@@ -1,13 +1,20 @@
-function snap = explicit_stefan_snapshot(k_w,rho_w,c_w, M, R_c, t_end, params)
+function snap = explicit_stefan_snapshot(k_w,rho_w,c_w, M, R_c, t_end, params, opts)
 %EXPLICIT_STEFAN_SNAPSHOT Explicit 1-D three-domain Stefan snapshot with Rc.
 % PDEs:  ∂t T = α ∂xx T in each region
 % x=0: single flux q0 through series resistance Rw + Rc + Rs
 % x=S(t): Ts=Tl=Tf at the face; Stefan law with one-sided slopes.
 % Far field: Tw(-Lw)=Tw_inf, Tl(Lf)=Tl_inf
+% OPTS is an optional struct supporting fields:
+%   CFL, nodes_per_diff, min_cells, domain_factor, min_seed_cells,
+%   min_length, nsave
 
     if nargin < 7
         error('explicit_stefan_snapshot:MissingParams', ...
               'Pass the calibrated VAM parameters to seed the solver.');
+    end
+
+    if nargin < 8 || isempty(opts)
+        opts = struct();
     end
 
 % Unpack
@@ -34,21 +41,25 @@ mu     = params.mu;
 % Determine a seed time so the explicit grid starts with one full solid cell.
 % This avoids the "no-solid" start of the analytic solution while keeping the
 % numerical domain consistent with the VAM calibration.
-min_seed_cells = 1;
 
 % Resolution tuned by nodes-per-diffusion-length (reduces work v. fixed 2000)
-nodes_per_diff = 200;
-min_cells = 400;
-Nw = max(ceil(nodes_per_diff*5), min_cells);
-Nf = max(ceil(nodes_per_diff*5), min_cells);
+nodes_per_diff = get_opt(opts, 'nodes_per_diff', 200);
+min_cells      = get_opt(opts, 'min_cells', 400);
+domain_factor  = get_opt(opts, 'domain_factor', 5);
+min_seed_cells = get_opt(opts, 'min_seed_cells', 1);
+min_length     = get_opt(opts, 'min_length', 2e-3);
+nsave          = get_opt(opts, 'nsave', 2000);
+
+Nw = max(ceil(nodes_per_diff*domain_factor), min_cells);
+Nf = max(ceil(nodes_per_diff*domain_factor), min_cells);
 
 % Fixed-point iteration to align the seed time (one full solid cell) and the
 % truncation lengths used for the semi-infinite domains.
 seed_time = 0;
 t_final_phys = t_end;
 for iter = 1:5
-    Lw = max(5*sqrt(aw*t_final_phys), 2e-3);
-    Lf = max(5*sqrt(max(as,al)*t_final_phys), 2e-3);
+    Lw = max(domain_factor*sqrt(aw*t_final_phys), min_length);
+    Lf = max(domain_factor*sqrt(max(as,al)*t_final_phys), min_length);
     dxw = Lw/Nw;   xw = -((1:Nw)' - 0.5)*dxw;  % 0^- at +dxw/2
     dxf = Lf/Nf;   xf =  ((1:Nf)' - 0.5)*dxf;  % 0^+ at +dxf/2
 
@@ -67,8 +78,8 @@ end
 
 seed_time = max(seed_time, 0);
 t_final_phys = max(t_end, seed_time);
-Lw = max(5*sqrt(aw*t_final_phys), 2e-3);
-Lf = max(5*sqrt(max(as,al)*t_final_phys), 2e-3);
+Lw = max(domain_factor*sqrt(aw*t_final_phys), min_length);
+Lf = max(domain_factor*sqrt(max(as,al)*t_final_phys), min_length);
 dxw = Lw/Nw;   xw = -((1:Nw)' - 0.5)*dxw;
 dxf = Lf/Nf;   xf =  ((1:Nf)' - 0.5)*dxf;
 seed_thickness = min_seed_cells * dxf;
@@ -112,7 +123,7 @@ sim_duration = max(t_end - seed_time, 0);
 seed_info.duration = sim_duration;
 
 % Explicit time step (CFL)
-CFL = 0.3;
+CFL = get_opt(opts, 'CFL', 0.3);
 dt_base = CFL * min( dxw^2/(2*aw), dxf^2/(2*max(as,al)) );
 nsteps = max(1, ceil(sim_duration/dt_base));
 if sim_duration == 0
@@ -128,7 +139,6 @@ coeff = local_coeffs(dt_base, aw, as, al, dxw, dxf);
 curr_dt = dt_base;
 
 % history buffers (downsampled only)
-nsave  = 2000;
 stride = max(1, floor(nsteps/nsave));
 t_hist = zeros(ceil(nsteps/stride),1);
 q_hist = zeros(ceil(nsteps/stride),1);
@@ -283,4 +293,13 @@ function coeff = local_coeffs(dt, aw, as, al, dxw, dxf)
     coeff.al_dt = al*dt;
     coeff.two_over_dx = 2/dxf;
     coeff.grad_upwind = 1/(3*dxf);
+end
+
+function val = get_opt(opts, field, default)
+%GET_OPT Fetch an option from a struct with a default fallback.
+    if isstruct(opts) && isfield(opts, field) && ~isempty(opts.(field))
+        val = opts.(field);
+    else
+        val = default;
+    end
 end

@@ -1,12 +1,24 @@
-function out = run_vam_case(label, k_w, rho_w, c_w, M, R_c, t_phys)
+function out = run_vam_case(label, k_w, rho_w, c_w, M, R_c, t_phys, opts)
 %RUN_VAM_CASE Solve VAM calibrations and explicit reference for a material case.
 %
-% OUT = RUN_VAM_CASE(LABEL, k_w, rho_w, c_w, M, R_c, t_phys) computes both
+% OUT = RUN_VAM_CASE(LABEL, k_w, rho_w, c_w, M, R_c, t_phys, OPTS) computes both
 % the early- and late-time VAM profiles along with an explicit finite-
 % difference snapshot for a single material case. Material properties are
 % provided via struct M with fields k_s, rho_s, c_s, k_l, rho_l, c_l, L,
 % Tf, Tw_inf, and Tl_inf. The function returns a struct containing the
 % calibrated parameters, spatial profiles, and explicit solver snapshot.
+% OPTS is an optional struct with fields:
+%   profile_pts_per_seg   - points per plotting segment (default 400)
+%   profile_extent_factor - domain multiple of sqrt(alpha*t) (default 5)
+%   explicit              - struct forwarded to explicit_stefan_snapshot
+
+    if nargin < 8 || isempty(opts)
+        opts = struct();
+    end
+
+    profile_pts_per_seg = get_opt(opts, 'profile_pts_per_seg', 400);
+    profile_extent_factor = get_opt(opts, 'profile_extent_factor', 5);
+    explicit_opts = get_opt(opts, 'explicit', struct());
 
     % Unpack material M (solid/liquid domain)
     k_s = M.k_s; rho_s = M.rho_s; c_s = M.c_s;
@@ -69,11 +81,11 @@ function out = run_vam_case(label, k_w, rho_w, c_w, M, R_c, t_phys)
     assert( he_e + 1e-9 >= h_c && h_c + 1e-9 >= he_l, 'heff sandwich violated');
 
     % ---- x-mesh for profile plots ----
-    Lw_e = 5*sqrt(alpha_w*tpe);  Ll_e = 5*sqrt(alpha_l*tpe);
-    Lw_l = 5*sqrt(alpha_w*tpl);  Ll_l = 5*sqrt(alpha_l*tpl);
+    Lw_e = profile_extent_factor*sqrt(alpha_w*tpe);  Ll_e = profile_extent_factor*sqrt(alpha_l*tpe);
+    Lw_l = profile_extent_factor*sqrt(alpha_w*tpl);  Ll_l = profile_extent_factor*sqrt(alpha_l*tpl);
     x_min = -max(Lw_e,Lw_l); x_max = max([Se,Sl]) + max(Ll_e,Ll_l);
     knots = sort([x_min, 0, Se, Sl, x_max]);
-    pts_per_seg = 400;
+    pts_per_seg = profile_pts_per_seg;
     nseg = numel(knots) - 1;
     npts = nseg*pts_per_seg - (nseg - 1);
     x = zeros(1, npts);
@@ -122,7 +134,7 @@ function out = run_vam_case(label, k_w, rho_w, c_w, M, R_c, t_phys)
         'Tl_inf',Tl_inf,'S0_e',S0_e,'E0_e',E0_e,'t0_e',t0_e);
 
     % >>> run explicit solver up to t_phys (stores q(t) history)
-    snap = explicit_stefan_snapshot(k_w, rho_w, c_w, M, R_c, t_phys, params_struct);
+    snap = explicit_stefan_snapshot(k_w, rho_w, c_w, M, R_c, t_phys, params_struct, explicit_opts);
 
     % Pack outputs
     out.label  = label;
@@ -138,4 +150,13 @@ function out = run_vam_case(label, k_w, rho_w, c_w, M, R_c, t_phys)
     out.Tl    = Tl;
     out.Tdiff = Tdiff;
     out.num   = snap;
+end
+
+function val = get_opt(opts, field, default)
+%GET_OPT Fetch an option from a struct with a default fallback.
+    if isstruct(opts) && isfield(opts, field) && ~isempty(opts.(field))
+        val = opts.(field);
+    else
+        val = default;
+    end
 end

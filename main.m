@@ -18,6 +18,18 @@ clear; close all; clc;
 t_phys = 0.1;                 % representative time for temperature profiles [s]
 R_c    = 2e-5;                % contact resistance [m^2 K/W] (shared across cases)
 
+% Explicit finite-difference snapshot controls (passed to explicit solver)
+explicit_opts = struct( ...
+    'CFL',            0.30, ...   % stability number for FTCS updates
+    'nodes_per_diff', 200, ...    % wall/liquid nodes per 5*sqrt(alpha*t) domain
+    'min_cells',      400, ...    % minimum nodes per semi-infinite side
+    'min_seed_cells', 1,   ...    % number of initial solid cells at the interface
+    'nsave',          2000 ...    % history samples retained for flux output
+    );
+
+% Profile plotting mesh density (points per segment between breakpoints)
+profile_pts_per_seg = 400;
+
 %% --- WALL (sapphire-like, shared) --------------------------------------
 k_w   = 40;     rho_w = 3980;  c_w = 750;   % sapphire-ish
 
@@ -34,8 +46,11 @@ B.L   = 59.2e3;                                   % J/kg
 B.Tf  = 231.93;   B.Tw_inf = 50;  B.Tl_inf = B.Tf - 5;
 
 %% --- RUN BOTH CASES ----------------------------------------------------
-caseA = run_vam_case('Water/Ice + Sapphire', k_w,rho_w,c_w, A, R_c, t_phys);
-caseB = run_vam_case('Tin (liq/sol) + Sapphire', k_w,rho_w,c_w, B, R_c, t_phys);
+sim_opts = struct('explicit', explicit_opts, ...
+                  'profile_pts_per_seg', profile_pts_per_seg);
+
+caseA = run_vam_case('Water/Ice + Sapphire', k_w,rho_w,c_w, A, R_c, t_phys, sim_opts);
+caseB = run_vam_case('Tin (liq/sol) + Sapphire', k_w,rho_w,c_w, B, R_c, t_phys, sim_opts);
 
 %% --- PLOTS: per case (profiles + difference + conductance + flux) -----
 plot_profiles(caseA);

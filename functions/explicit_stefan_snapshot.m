@@ -1,9 +1,14 @@
-function snap = explicit_stefan_snapshot(k_w,rho_w,c_w, M, R_c, t_end)
+function snap = explicit_stefan_snapshot(k_w,rho_w,c_w, M, R_c, t_end, params)
 %EXPLICIT_STEFAN_SNAPSHOT Explicit 1-D three-domain Stefan snapshot with Rc.
 % PDEs:  ∂t T = α ∂xx T in each region
 % x=0: single flux q0 through series resistance Rw + Rc + Rs
 % x=S(t): Ts=Tl=Tf at the face; Stefan law with one-sided slopes.
 % Far field: Tw(-Lw)=Tw_inf, Tl(Lf)=Tl_inf
+
+    if nargin < 7
+        error('explicit_stefan_snapshot:MissingParams', ...
+              'Pass the calibrated VAM parameters to seed the solver.');
+    end
 
 % Unpack
 k_s=M.k_s; rho_s=M.rho_s; c_s=M.c_s;
@@ -15,33 +20,106 @@ aw = k_w/(rho_w*c_w);
 as = k_s/(rho_s*c_s);
 al = k_l/(rho_l*c_l);
 
-% Semi-infinite truncations (~5 diffusion lengths at t_end)
-Lw = max(5*sqrt(aw*t_end), 2e-3);
-Lf = max(5*sqrt(max(as,al)*t_end), 2e-3);
+% Extract VAM calibration pieces needed for seeding
+lam  = params.lam;
+Ti   = params.Ti;
+S0_e = params.S0_e;
+E0_e = params.E0_e;
+t0_e = params.t0_e;
+Tf   = params.Tf;
+Tw_inf = params.Tw_inf;
+Tl_inf = params.Tl_inf;
+mu     = params.mu;
+
+% Determine a seed time so the explicit grid starts with one full solid cell.
+% This avoids the "no-solid" start of the analytic solution while keeping the
+% numerical domain consistent with the VAM calibration.
+min_seed_cells = 1;
 
 % Resolution tuned by nodes-per-diffusion-length (reduces work v. fixed 2000)
 nodes_per_diff = 200;
 min_cells = 400;
 Nw = max(ceil(nodes_per_diff*5), min_cells);
 Nf = max(ceil(nodes_per_diff*5), min_cells);
-dxw = Lw/Nw;   xw = -((1:Nw)' - 0.5)*dxw;  % 0^- at +dxw/2
-dxf = Lf/Nf;   xf =  ((1:Nf)' - 0.5)*dxf;  % 0^+ at +dxf/2
 
-% ICs
-Tw   = Tw_inf*ones(Nw,1);
-Tfld = Tl_inf*ones(Nf,1);
+% Fixed-point iteration to align the seed time (one full solid cell) and the
+% truncation lengths used for the semi-infinite domains.
+seed_time = 0;
+t_final_phys = t_end;
+for iter = 1:5
+    Lw = max(5*sqrt(aw*t_final_phys), 2e-3);
+    Lf = max(5*sqrt(max(as,al)*t_final_phys), 2e-3);
+    dxw = Lw/Nw;   xw = -((1:Nw)' - 0.5)*dxw;  % 0^- at +dxw/2
+    dxf = Lf/Nf;   xf =  ((1:Nf)' - 0.5)*dxf;  % 0^+ at +dxf/2
 
-% Seed a thin solid so a front exists
-seed_cells = 2;
-m0 = max(1, min(Nf-1, seed_cells));
-S_real = m0*dxf;
-Tfld(1:m0) = Tf;
+    seed_thickness = min_seed_cells * dxf;
+    seed_time_new = ((seed_thickness + S0_e)^2) / (4*lam^2*as) - t0_e;
+    seed_time_new = max(0, seed_time_new);
+    t_final_phys = max(t_end, seed_time_new);
+
+    if abs(seed_time_new - seed_time) < 1e-12
+        seed_time = seed_time_new;
+        break;
+    end
+
+    seed_time = seed_time_new;
+end
+
+seed_time = max(seed_time, 0);
+t_final_phys = max(t_end, seed_time);
+Lw = max(5*sqrt(aw*t_final_phys), 2e-3);
+Lf = max(5*sqrt(max(as,al)*t_final_phys), 2e-3);
+dxw = Lw/Nw;   xw = -((1:Nw)' - 0.5)*dxw;
+dxf = Lf/Nf;   xf =  ((1:Nf)' - 0.5)*dxf;
+seed_thickness = min_seed_cells * dxf;
+seed_time = ((seed_thickness + S0_e)^2) / (4*lam^2*as) - t0_e;
+seed_time = max(0, seed_time);
+t_final_phys = max(t_end, seed_time);
+
+% Evaluate the early-time VAM solution at the seed time for ICs.
+tpe_seed = seed_time + t0_e;
+den_w_e = 2*sqrt(aw*tpe_seed);
+den_s_e = 2*sqrt(as*tpe_seed);
+den_l_e = 2*sqrt(al*tpe_seed);
+erf_lam = erf(lam);
+erf_mu  = erf(mu);
+
+Se_seed = 2*lam*sqrt(as*tpe_seed) - S0_e;
+
+Tw = Ti + (Ti - Tw_inf) .* erf( (xw - E0_e) ./ den_w_e );
+
+Tfld = zeros(Nf,1);
+solid_mask  = xf <= Se_seed;
+liquid_mask = ~solid_mask;
+Tfld(solid_mask) = Ti + (Tf - Ti) .* erf( (xf(solid_mask) + S0_e) ./ den_s_e ) ./ erf_lam;
+Tfld(liquid_mask) = Tl_inf + (Tf - Tl_inf) .* ...
+    ( erf( (xf(liquid_mask) + S0_e) ./ den_l_e ) - 1 ) ./ (erf_mu - 1);
+
+% Ensure the seed matches the targeted thickness; clamp interface inside grid.
+S_real = min((Nf-1)*dxf, max(dxf, Se_seed));
+S_seed = S_real;
+
+seed_info.Se_vam = Se_seed;
+seed_info.time   = seed_time;
+seed_info.thickness = S_seed;
+seed_info.cell_width = dxf;
+
+% Track the physical and relative times separately so we can report a history
+% measured from t = 0 while integrating from t = seed_time.
+t_phys = seed_time;
+t_rel  = 0;
+sim_duration = max(t_end - seed_time, 0);
+seed_info.duration = sim_duration;
 
 % Explicit time step (CFL)
 CFL = 0.3;
 dt_base = CFL * min( dxw^2/(2*aw), dxf^2/(2*max(as,al)) );
-nsteps = max(1, ceil(t_end/dt_base));
-dt_base = min(dt_base, t_end/nsteps);
+nsteps = max(1, ceil(sim_duration/dt_base));
+if sim_duration == 0
+    dt_base = 0;
+else
+    dt_base = min(dt_base, sim_duration/nsteps);
+end
 t  = 0;
 
 % Precompute coefficients for the nominal dt (reuse unless final step smaller)
@@ -54,10 +132,16 @@ nsave  = 2000;
 stride = max(1, floor(nsteps/nsave));
 t_hist = zeros(ceil(nsteps/stride),1);
 q_hist = zeros(ceil(nsteps/stride),1);
+Tw_face_hist = zeros(ceil(nsteps/stride),1);
+Ts_face_hist = zeros(ceil(nsteps/stride),1);
 ksave  = 0;
 
 for n = 1:nsteps
-    dt_step = min(curr_dt, t_end - t);
+    if sim_duration == 0
+        dt_step = 0;
+    else
+        dt_step = min(curr_dt, sim_duration - t);
+    end
     if dt_step <= 0
         break;
     end
@@ -66,18 +150,24 @@ for n = 1:nsteps
         curr_dt = dt_step;
     end
     t = t + dt_step;
+    t_phys = t_phys + dt_step;
+    t_rel  = t_phys - seed_time;
 
     % Adjacent face index from current continuous front
     m = max(1, min(Nf-1, floor(S_real/dxf)));
 
     % ===== x=0 contact resistance: common flux q0 through series =====
     q0 = (Tw(1) - Tfld(1)) / (Rw + R_c + Rs);   % + toward +x (into fluid)
+    Tw_face = Tw(1) - Rw*q0;
+    Ts_face = Tfld(1) + Rs*q0;
 
     % Save downsampled q(t)
     if mod(n, stride)==0
         ksave = ksave + 1;
-        t_hist(ksave) = t;
-        q_hist(ksave) = q0;
+        t_hist(ksave) = t_rel;
+        q_hist(ksave) = (Tw_face - Ts_face)/R_c;
+        Tw_face_hist(ksave) = Tw_face;
+        Ts_face_hist(ksave) = Ts_face;
     end
 
     % Ghosts consistent with q0
@@ -158,7 +248,7 @@ for n = 1:nsteps
     end
 
     S_real = S_real + dt_step * ( k_s*grad_s - k_l*grad_l ) / (rho_s*L);
-    S_real = min( (Nf-1)*dxf, max( 1*dxf, S_real ) );
+    S_real = min( (Nf-1)*dxf, max( dxf, S_real ) );
 end
 
 % Pack snapshot
@@ -166,13 +256,19 @@ m        = max(1, min(Nf-1, floor(S_real/dxf)));
 snap.x   = [xw; xf];
 snap.T   = [Tw; Tfld];
 snap.S   = S_real;
-snap.t   = t;
+snap.t   = t_end;
+snap.t_rel = t_rel;
+snap.t_offset = seed_time;
+snap.seed = seed_info;
 
 % Trim history to what we actually saved
 t_hist = t_hist(1:ksave);
 q_hist = q_hist(1:ksave);
 snap.q.t   = t_hist;
 snap.q.val = q_hist;
+snap.q.Tw_face = Tw_face_hist(1:ksave);
+snap.q.Ts_face = Ts_face_hist(1:ksave);
+snap.q.t_phys = t_hist + seed_time;
 end
 
 function coeff = local_coeffs(dt, aw, as, al, dxw, dxf)

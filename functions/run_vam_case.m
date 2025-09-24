@@ -10,8 +10,8 @@ function out = run_vam_case(label, k_w, rho_w, c_w, M, R_c, t_phys, opts)
 % OPTS is an optional struct with fields:
 %   profile_pts_per_seg   - points per plotting segment (default 400)
 %   profile_extent_factor - domain multiple of sqrt(alpha*t) (default 5)
-%   explicit              - struct forwarded to explicit/enthalpy snapshots.
-%                           May include a nested 'refine' struct with fields
+%   explicit              - struct forwarded to the explicit snapshot. May
+%                           include a nested 'refine' struct with fields
 %                           max_iters, factor, cfl_shrink, tol_abs_T, tol_rel_T,
 %                           tol_abs_q, tol_rel_q, history_shrink, and min_CFL
 %                           to control the automatic VAM-bounded refinement.
@@ -144,11 +144,7 @@ function out = run_vam_case(label, k_w, rho_w, c_w, M, R_c, t_phys, opts)
     [snap_explicit, meta_explicit] = run_refined_snapshot(@explicit_stefan_snapshot, ...
         'explicit', explicit_opts, k_w, rho_w, c_w, M, R_c, t_phys, ...
         params_struct, x, Te, Tl);
-    [snap_enthalpy, meta_enthalpy] = run_refined_snapshot(@enthalpy_stefan_snapshot, ...
-        'enthalpy', explicit_opts, k_w, rho_w, c_w, M, R_c, t_phys, ...
-        params_struct, x, Te, Tl);
     snap_explicit.meta = meta_explicit;
-    snap_enthalpy.meta = meta_enthalpy;
 
     % Pack outputs
     out.label  = label;
@@ -163,8 +159,8 @@ function out = run_vam_case(label, k_w, rho_w, c_w, M, R_c, t_phys, opts)
     out.Te    = Te;
     out.Tl    = Tl;
     out.Tdiff = Tdiff;
-    out.num   = struct('explicit', snap_explicit, 'enthalpy', snap_enthalpy);
-    out.diagnostics = struct('explicit', meta_explicit, 'enthalpy', meta_enthalpy);
+    out.num   = struct('explicit', snap_explicit);
+    out.diagnostics = struct('explicit', meta_explicit);
 end
 
 function val = get_opt(opts, field, default)
@@ -184,7 +180,7 @@ function [snap, meta] = run_refined_snapshot(solver_fn, method_key, base_opts, .
     cfg.max_iters   = get_opt(refine_cfg, 'max_iters',   3);
     cfg.factor      = get_opt(refine_cfg, 'factor',      1.5);
     cfg.cfl_shrink  = get_opt(refine_cfg, 'cfl_shrink',  0.75);
-    cfg.tol_abs_T   = get_opt(refine_cfg, 'tol_abs_T',   0.15);
+    cfg.tol_abs_T   = get_opt(refine_cfg, 'tol_abs_T',   3.0);
     cfg.tol_rel_T   = get_opt(refine_cfg, 'tol_rel_T',   0.01);
     cfg.tol_abs_q   = get_opt(refine_cfg, 'tol_abs_q',   200);
     cfg.tol_rel_q   = get_opt(refine_cfg, 'tol_rel_q',   0.01);

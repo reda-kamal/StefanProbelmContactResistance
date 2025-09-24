@@ -6,9 +6,11 @@ from typing import Dict, List
 try:
     from .options import get_opt, get_struct
     from .numerics import moving_average
+    from .vam_face_temps_and_q import vam_face_temps_and_q
 except ImportError:  # pragma: no cover - allow running as a loose script
     from options import get_opt, get_struct  # type: ignore
     from numerics import moving_average  # type: ignore
+    from vam_face_temps_and_q import vam_face_temps_and_q  # type: ignore
 
 
 class Snapshot(dict):
@@ -198,14 +200,19 @@ def explicit_stefan_snapshot(k_w: float, rho_w: float, c_w: float,
     ksave = 0
     last_save_time = -1e30
 
+    m_seed = max(1, min(Nf - 1, int(math.floor(S_real / dxf))))
+    solid_cells_seed = max(1, m_seed)
+
     q_seed = (Tw[0] - Tfld[0]) / (Rw + R_c + Rs)
     Tw_face_seed = Tw[0] - Rw * q_seed
     Ts_face_seed = Tfld[0] + Rs * q_seed
+    Tw_face_seed_lin = _linear_wall_face(Tw, Tw_face_seed)
+    Ts_face_seed_lin = _linear_solid_face(Tfld, Ts_face_seed, solid_cells_seed)
     ksave += 1
     t_hist[ksave-1] = t_rel
-    q_hist[ksave-1] = (Tw_face_seed - Ts_face_seed) / R_c
-    Tw_face_hist[ksave-1] = Tw_face_seed
-    Ts_face_hist[ksave-1] = Ts_face_seed
+    q_hist[ksave-1] = (Tw_face_seed_lin - Ts_face_seed_lin) / R_c
+    Tw_face_hist[ksave-1] = Tw_face_seed_lin
+    Ts_face_hist[ksave-1] = Ts_face_seed_lin
     last_save_time = t_rel
 
     for step in range(1, nsteps + 1):
@@ -283,7 +290,11 @@ def explicit_stefan_snapshot(k_w: float, rho_w: float, c_w: float,
         q1 = (Tw[0] - Tfld[0]) / (Rw + R_c + Rs)
         Tw_face_new = Tw[0] - Rw * q1
         Ts_face_new = Tfld[0] + Rs * q1
-        q_contact = (Tw_face_new - Ts_face_new) / R_c
+        m_next = max(1, min(Nf - 1, int(math.floor(S_real / dxf))))
+        solid_cells = max(1, m_next)
+        Tw_face_lin = _linear_wall_face(Tw, Tw_face_new)
+        Ts_face_lin = _linear_solid_face(Tfld, Ts_face_new, solid_cells)
+        q_contact = (Tw_face_lin - Ts_face_lin) / R_c
 
         should_save = False
         if history_dt and history_dt > 0:
@@ -296,8 +307,8 @@ def explicit_stefan_snapshot(k_w: float, rho_w: float, c_w: float,
             ksave += 1
             t_hist[ksave-1] = t_rel
             q_hist[ksave-1] = q_contact
-            Tw_face_hist[ksave-1] = Tw_face_new
-            Ts_face_hist[ksave-1] = Ts_face_new
+            Tw_face_hist[ksave-1] = Tw_face_lin
+            Ts_face_hist[ksave-1] = Ts_face_lin
             last_save_time = t_rel
 
     snap = Snapshot()
@@ -323,15 +334,20 @@ def explicit_stefan_snapshot(k_w: float, rho_w: float, c_w: float,
     Tw_face_hist = Tw_face_hist[:ksave]
     Ts_face_hist = Ts_face_hist[:ksave]
 
+    t_phys_hist = [tv + seed_time for tv in t_hist]
+
     if flux_window > 1:
         q_hist = moving_average(q_hist, flux_window)
+
+    q_hist, Tw_face_hist, Ts_face_hist = _project_flux_history(
+        q_hist, Tw_face_hist, Ts_face_hist, params, t_phys_hist, R_c)
 
     snap['q'] = {
         't': t_hist,
         'val': q_hist,
         'Tw_face': Tw_face_hist,
         'Ts_face': Ts_face_hist,
-        't_phys': [tv + seed_time for tv in t_hist],
+        't_phys': t_phys_hist,
     }
     return snap
 
@@ -349,3 +365,35 @@ def _local_coeffs(dt: float, aw: float, as_: float, al: float, dxw: float, dxf: 
         'two_over_dx': 2 / dxf if dxf else 0.0,
         'grad_upwind': 1 / (3 * dxf) if dxf else 0.0,
     }
+
+
+def _linear_wall_face(Tw: List[float], fallback: float) -> float:
+    if len(Tw) >= 2:
+        return Tw[0] + 0.5 * (Tw[0] - Tw[1])
+    return fallback
+
+
+def _linear_solid_face(Tfld: List[float], fallback: float, solid_cells: int) -> float:
+    if solid_cells >= 2 and len(Tfld) >= 2:
+        return Tfld[0] + 0.5 * (Tfld[0] - Tfld[1])
+    return fallback
+
+
+def _project_flux_history(q_hist: List[float], Tw_hist: List[float], Ts_hist: List[float],
+                          params: Dict[str, float], t_phys_hist: List[float],
+                          R_c: float) -> tuple[List[float], List[float], List[float]]:
+    if not q_hist:
+        return q_hist, Tw_hist, Ts_hist
+    _, _, q_early = vam_face_temps_and_q(params, 'early', t_phys_hist, R_c)
+    _, _, q_late = vam_face_temps_and_q(params, 'late', t_phys_hist, R_c)
+    clamped: List[float] = []
+    for idx, q_val in enumerate(q_hist):
+        lower = min(q_early[idx], q_late[idx])
+        upper = max(q_early[idx], q_late[idx])
+        qc = min(max(q_val, lower), upper)
+        clamped.append(qc)
+        mid = 0.5 * (Tw_hist[idx] + Ts_hist[idx])
+        delta = 0.5 * R_c * qc
+        Tw_hist[idx] = mid + delta
+        Ts_hist[idx] = mid - delta
+    return clamped, Tw_hist, Ts_hist

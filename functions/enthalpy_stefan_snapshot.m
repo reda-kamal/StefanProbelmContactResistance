@@ -221,10 +221,7 @@ function snap = enthalpy_stefan_snapshot(k_w,rho_w,c_w, M, R_c, t_end, params, o
 
     % Initial state (seed)
     [Tfluid, phi_liq, k_cell] = enthalpy_state(H, Tf, Tl_inf, rhoLcpL, rhoScpS, k_l, k_s, L_vol);
-    Rs_eff = dxf/(2*max(k_cell(1), eps));
-    q_seed = (Tw(1) - Tfluid(1)) / (Rw + R_c + Rs_eff);
-    Tw_face_seed = Tw(1) - Rw*q_seed;
-    Ts_face_seed = Tfluid(1) + Rs_eff*q_seed;
+    [q_seed, Tw_face_seed, Ts_face_seed] = contact_flux(Tw(1), Tfluid(1), phi_liq(1), Tf, Rw, R_c, dxf, k_cell(1));
     ksave = ksave + 1;
     t_hist(ksave) = t_rel;
     q_hist(ksave) = (Tw_face_seed - Ts_face_seed)/R_c;
@@ -249,11 +246,8 @@ function snap = enthalpy_stefan_snapshot(k_w,rho_w,c_w, M, R_c, t_end, params, o
         % Reconstruct temperature/phase/conductivity
         [Tfluid, phi_liq, k_cell] = enthalpy_state(H, Tf, Tl_inf, rhoLcpL, rhoScpS, k_l, k_s, L_vol);
 
-        % Contact flux
-        Rs_eff = dxf/(2*max(k_cell(1), eps));
-        q0 = (Tw(1) - Tfluid(1)) / (Rw + R_c + Rs_eff);
-        Tw_face = Tw(1) - Rw*q0;
-        Ts_face = Tfluid(1) + Rs_eff*q0;
+        % Contact flux with supercooling-aware interface handling
+        [q0, Tw_face, Ts_face] = contact_flux(Tw(1), Tfluid(1), phi_liq(1), Tf, Rw, R_c, dxf, k_cell(1));
 
         % Wall update
         Tw_new = Tw;
@@ -291,12 +285,8 @@ function snap = enthalpy_stefan_snapshot(k_w,rho_w,c_w, M, R_c, t_end, params, o
         t_rel  = t_phys - seed_time;
 
         % Recompute state at updated level for history
-        [Tfluid, ~, k_cell] = enthalpy_state(H, Tf, Tl_inf, rhoLcpL, rhoScpS, k_l, k_s, L_vol);
-        Rs_eff = dxf/(2*max(k_cell(1), eps));
-        q1 = (Tw(1) - Tfluid(1)) / (Rw + R_c + Rs_eff);
-        Tw_face_new = Tw(1) - Rw*q1;
-        Ts_face_new = Tfluid(1) + Rs_eff*q1;
-        q_contact = (Tw_face_new - Ts_face_new)/R_c;
+        [Tfluid, phi_liq, k_cell] = enthalpy_state(H, Tf, Tl_inf, rhoLcpL, rhoScpS, k_l, k_s, L_vol);
+        [q_contact, Tw_face_new, Ts_face_new] = contact_flux(Tw(1), Tfluid(1), phi_liq(1), Tf, Rw, R_c, dxf, k_cell(1));
 
         should_save = false;
         if history_dt > 0
@@ -415,6 +405,26 @@ function k_face = harmonic_mean(kL, kR)
         k_face = kL;
     else
         k_face = 2*kL*kR/(kL + kR);
+    end
+end
+
+function [q0, Tw_face, Ts_face] = contact_flux(Tw_cell, T_cell, phi_cell, Tf, Rw, R_c, dxf, k_cell)
+%CONTACT_FLUX Compute wall contact flux honoring supercooling/mushy physics.
+    phi_cell = min(max(phi_cell, 0), 1);
+    tol = 1e-8;
+
+    if phi_cell > tol && phi_cell < 1 - tol
+        % Mushy control volume: enforce interface temperature at Tf and
+        % collapse the half-cell resistance (uniform Tf assumption).
+        q0 = (Tw_cell - Tf) / (Rw + R_c);
+        Tw_face = Tw_cell - Rw*q0;
+        Ts_face = Tf;
+    else
+        k_eff = max(k_cell, eps);
+        Rs_eff = dxf / (2*k_eff);
+        q0 = (Tw_cell - T_cell) / (Rw + R_c + Rs_eff);
+        Tw_face = Tw_cell - Rw*q0;
+        Ts_face = T_cell + Rs_eff*q0;
     end
 end
 

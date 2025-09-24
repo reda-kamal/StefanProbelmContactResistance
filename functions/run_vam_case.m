@@ -133,8 +133,9 @@ function out = run_vam_case(label, k_w, rho_w, c_w, M, R_c, t_phys, opts)
     params_struct = struct('lam',lam,'mu',mu,'Ti',Ti,'Tf',Tf,'Tw_inf',Tw_inf, ...
         'Tl_inf',Tl_inf,'S0_e',S0_e,'E0_e',E0_e,'t0_e',t0_e);
 
-    % >>> run explicit solver up to t_phys (stores q(t) history)
-    snap = explicit_stefan_snapshot(k_w, rho_w, c_w, M, R_c, t_phys, params_struct, explicit_opts);
+    % >>> run numerical solvers up to t_phys (stores q(t) history)
+    snap_explicit = explicit_stefan_snapshot(k_w, rho_w, c_w, M, R_c, t_phys, params_struct, explicit_opts);
+    snap_enthalpy = enthalpy_stefan_snapshot(k_w, rho_w, c_w, M, R_c, t_phys, params_struct, explicit_opts);
 
     % Pack outputs
     out.label  = label;
@@ -149,7 +150,7 @@ function out = run_vam_case(label, k_w, rho_w, c_w, M, R_c, t_phys, opts)
     out.Te    = Te;
     out.Tl    = Tl;
     out.Tdiff = Tdiff;
-    out.num   = snap;
+    out.num   = struct('explicit', snap_explicit, 'enthalpy', snap_enthalpy);
 end
 
 function val = get_opt(opts, field, default)

@@ -12,9 +12,25 @@ function plot_profiles(caseX)
     xline(Sl, 'b--','LineWidth',1.0, 'DisplayName','S^{(\infty)}');
 
     if isfield(caseX,'num') && ~isempty(caseX.num)
-        xn = caseX.num.x;  Tn = caseX.num.T;  Sn = caseX.num.S;
-        plot(xn, Tn, '.', 'MarkerSize', 6, 'DisplayName','Explicit numeric');
-        xline(Sn, 'm--','LineWidth',1.2, 'DisplayName','S^{num}');
+        num_struct = caseX.num;
+        if isfield(num_struct, 'x') && isfield(num_struct, 'T')
+            xn = num_struct.x;  Tn = num_struct.T;  Sn = num_struct.S;
+            plot(xn, Tn, '.', 'MarkerSize', 6, 'DisplayName','Explicit numeric');
+            xline(Sn, 'm--','LineWidth',1.2, 'DisplayName','S^{num}');
+        else
+            if isfield(num_struct,'explicit')
+                snap = num_struct.explicit;
+                plot(snap.x, snap.T, '.', 'MarkerSize', 6, 'DisplayName','Explicit numeric');
+                xline(snap.S, 'm--','LineWidth',1.2, 'DisplayName','S^{num}_{exp}');
+            end
+            if isfield(num_struct,'enthalpy')
+                snapH = num_struct.enthalpy;
+                plot(snapH.x, snapH.T, 'o', 'MarkerSize', 4, 'LineStyle','none', ...
+                    'MarkerFaceColor','none', 'MarkerEdgeColor',[0.3 0.75 0.93], ...
+                    'DisplayName','Enthalpy numeric');
+                xline(snapH.S, 'c-.','LineWidth',1.2, 'DisplayName','S^{num}_{enth}');
+            end
+        end
     end
 
     xlabel('Physical coordinate  x  [m]');

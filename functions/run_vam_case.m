@@ -10,7 +10,11 @@ function out = run_vam_case(label, k_w, rho_w, c_w, M, R_c, t_phys, opts)
 % OPTS is an optional struct with fields:
 %   profile_pts_per_seg   - points per plotting segment (default 400)
 %   profile_extent_factor - domain multiple of sqrt(alpha*t) (default 5)
-%   explicit              - struct forwarded to explicit_stefan_snapshot
+%   explicit              - struct forwarded to explicit/enthalpy snapshots.
+%                           May include a nested 'refine' struct with fields
+%                           max_iters, factor, cfl_shrink, tol_abs_T, tol_rel_T,
+%                           tol_abs_q, tol_rel_q, history_shrink, and min_CFL
+%                           to control the automatic VAM-bounded refinement.
 
     if nargin < 8 || isempty(opts)
         opts = struct();
@@ -134,8 +138,14 @@ function out = run_vam_case(label, k_w, rho_w, c_w, M, R_c, t_phys, opts)
         'Tl_inf',Tl_inf,'S0_e',S0_e,'E0_e',E0_e,'t0_e',t0_e);
 
     % >>> run numerical solvers up to t_phys (stores q(t) history)
-    snap_explicit = explicit_stefan_snapshot(k_w, rho_w, c_w, M, R_c, t_phys, params_struct, explicit_opts);
-    snap_enthalpy = enthalpy_stefan_snapshot(k_w, rho_w, c_w, M, R_c, t_phys, params_struct, explicit_opts);
+    [snap_explicit, meta_explicit] = run_refined_snapshot(@explicit_stefan_snapshot, ...
+        'explicit', explicit_opts, k_w, rho_w, c_w, M, R_c, t_phys, ...
+        params_struct, x, Te, Tl);
+    [snap_enthalpy, meta_enthalpy] = run_refined_snapshot(@enthalpy_stefan_snapshot, ...
+        'enthalpy', explicit_opts, k_w, rho_w, c_w, M, R_c, t_phys, ...
+        params_struct, x, Te, Tl);
+    snap_explicit.meta = meta_explicit;
+    snap_enthalpy.meta = meta_enthalpy;
 
     % Pack outputs
     out.label  = label;
@@ -151,6 +161,7 @@ function out = run_vam_case(label, k_w, rho_w, c_w, M, R_c, t_phys, opts)
     out.Tl    = Tl;
     out.Tdiff = Tdiff;
     out.num   = struct('explicit', snap_explicit, 'enthalpy', snap_enthalpy);
+    out.diagnostics = struct('explicit', meta_explicit, 'enthalpy', meta_enthalpy);
 end
 
 function val = get_opt(opts, field, default)
@@ -160,4 +171,198 @@ function val = get_opt(opts, field, default)
     else
         val = default;
     end
+end
+
+function [snap, meta] = run_refined_snapshot(solver_fn, method_key, base_opts, ...
+        k_w, rho_w, c_w, M, R_c, t_phys, params_struct, x_ref, Te_ref, Tl_ref)
+%RUN_REFINED_SNAPSHOT Execute solver with optional adaptive refinement.
+
+    refine_cfg = get_opt(base_opts, 'refine', struct());
+    cfg.max_iters   = get_opt(refine_cfg, 'max_iters',   3);
+    cfg.factor      = get_opt(refine_cfg, 'factor',      1.5);
+    cfg.cfl_shrink  = get_opt(refine_cfg, 'cfl_shrink',  0.75);
+    cfg.tol_abs_T   = get_opt(refine_cfg, 'tol_abs_T',   0.15);
+    cfg.tol_rel_T   = get_opt(refine_cfg, 'tol_rel_T',   0.01);
+    cfg.tol_abs_q   = get_opt(refine_cfg, 'tol_abs_q',   200);
+    cfg.tol_rel_q   = get_opt(refine_cfg, 'tol_rel_q',   0.01);
+    cfg.history_shrink = get_opt(refine_cfg, 'history_shrink', 0.75);
+    cfg.min_CFL     = get_opt(refine_cfg, 'min_CFL',     0.05);
+
+    curr_opts = base_opts;
+    adjustments = struct('iter',{},'CFL',{},'wall_cells',{},'fluid_cells',{});
+    ok = false;
+    bounds_diag = struct();
+    diag_history = cell(max(1,cfg.max_iters),1);
+
+    for iter = 1:max(1,cfg.max_iters)
+        snap = solver_fn(k_w, rho_w, c_w, M, R_c, t_phys, params_struct, curr_opts);
+        [ok, bounds_diag] = check_snapshot_bounds(snap, x_ref, Te_ref, Tl_ref, ...
+            params_struct, R_c, t_phys, cfg);
+        bounds_diag.iteration = iter;
+        diag_history{iter} = bounds_diag;
+        if ok
+            break;
+        end
+
+        if iter == cfg.max_iters
+            break;
+        end
+
+        [curr_opts, adj] = refine_options(curr_opts, cfg);
+        adj.iter = iter + 1;
+        adjustments(end+1) = adj; %#ok<AGROW>
+    end
+
+    meta = struct();
+    meta.method = method_key;
+    if isfield(bounds_diag, 'iteration')
+        iter_count = bounds_diag.iteration;
+    else
+        iter_count = 1;
+    end
+    meta.refinement = struct('iterations', iter_count, ...
+                             'success', ok, ...
+                             'max_iters', cfg.max_iters, ...
+                             'adjustments', adjustments);
+    meta.bounds = bounds_diag;
+    meta.bounds_history = diag_history(1:iter_count);
+    meta.options = curr_opts;
+    meta.initial_options = base_opts;
+    meta.refine_cfg = cfg;
+end
+
+function [ok, diag] = check_snapshot_bounds(snap, x_ref, Te_ref, Tl_ref, params, R_c, t_phys, cfg)
+%CHECK_SNAPSHOT_BOUNDS Compare numeric profiles/flux with VAM sandwich.
+
+    diag = struct();
+
+    % --- Temperature profile bounds ---
+    if isfield(snap, 'x') && isfield(snap, 'T')
+        Te_interp = interp1(x_ref, Te_ref, snap.x, 'linear', 'extrap');
+        Tl_interp = interp1(x_ref, Tl_ref, snap.x, 'linear', 'extrap');
+        lower_env = min(Te_interp, Tl_interp);
+        upper_env = max(Te_interp, Tl_interp);
+        Tvals = snap.T(:);
+        upper_env = upper_env(:);
+        lower_env = lower_env(:);
+        env_span  = max(upper_env - lower_env, [], 'omitnan');
+        if isempty(env_span) || isnan(env_span)
+            env_span = 0;
+        end
+        over_err  = Tvals - upper_env;
+        under_err = lower_env - Tvals;
+        max_over  = max([0; over_err(:)], [], 'omitnan');
+        max_under = max([0; under_err(:)], [], 'omitnan');
+        profile_violation = max(max_over, max_under);
+        tol_profile = max(cfg.tol_abs_T, cfg.tol_rel_T * max(env_span, 1e-6));
+        ok_profile = profile_violation <= tol_profile + 1e-12;
+        [~, idx_over] = max(over_err);
+        [~, idx_under] = max(under_err);
+        diag.profile = struct('max_over', max_over, 'max_under', max_under, ...
+            'max_violation', profile_violation, 'tol', tol_profile, ...
+            'index_over', idx_over, 'index_under', idx_under, ...
+            'ok', ok_profile);
+    else
+        ok_profile = true;
+        diag.profile = struct('max_over',0,'max_under',0,'max_violation',0,'tol',0,'ok',true);
+    end
+
+    % --- Flux history bounds ---
+    if isfield(snap, 'q') && isfield(snap.q, 'val')
+        q_vals = snap.q.val(:);
+        if isempty(q_vals)
+            ok_flux = true;
+            diag.flux = struct('max_over',0,'max_under',0,'max_violation',0,'tol',0,'ok',true);
+        else
+            if isfield(snap.q, 't_phys')
+                t_hist = snap.q.t_phys(:)';
+            elseif isfield(snap.q, 't')
+                if isfield(snap, 't_offset')
+                    t_hist = snap.q.t(:)' + snap.t_offset;
+                else
+                    t_hist = snap.q.t(:)';
+                end
+            else
+                t_hist = linspace(0, t_phys, numel(q_vals));
+            end
+            [~,~,q_early] = vam_face_temps_and_q(params, 'early', t_hist, R_c);
+            [~,~,q_late]  = vam_face_temps_and_q(params, 'late',  t_hist, R_c);
+            lower_q = min(q_early, q_late);
+            upper_q = max(q_early, q_late);
+            lower_q = lower_q(:);
+            upper_q = upper_q(:);
+            span_q  = max(upper_q - lower_q, [], 'omitnan');
+            if isempty(span_q) || isnan(span_q)
+                span_q = 0;
+            end
+            q_over  = q_vals - upper_q;
+            q_under = lower_q - q_vals;
+            max_over_q  = max([0; q_over], [], 'omitnan');
+            max_under_q = max([0; q_under], [], 'omitnan');
+            flux_violation = max(max_over_q, max_under_q);
+            tol_flux = max(cfg.tol_abs_q, cfg.tol_rel_q * max(span_q, 1e-6));
+            ok_flux = flux_violation <= tol_flux + 1e-6;
+            [~, idx_over_q] = max(q_over);
+            [~, idx_under_q] = max(q_under);
+            diag.flux = struct('max_over',max_over_q,'max_under',max_under_q, ...
+                'max_violation',flux_violation,'tol',tol_flux, ...
+                'index_over',idx_over_q,'index_under',idx_under_q, ...
+                'ok', ok_flux);
+        end
+    else
+        ok_flux = true;
+        diag.flux = struct('max_over',0,'max_under',0,'max_violation',0,'tol',0,'ok',true);
+    end
+
+    ok = ok_profile && ok_flux;
+    diag.ok_profile = ok_profile;
+    diag.ok_flux = ok_flux;
+    diag.ok = ok;
+end
+
+function [next_opts, adj] = refine_options(curr_opts, cfg)
+%REFINE_OPTIONS Increase spatial resolution / reduce CFL for retry.
+
+    next_opts = curr_opts;
+
+    if isfield(next_opts, 'CFL') && next_opts.CFL > cfg.min_CFL
+        next_opts.CFL = max(cfg.min_CFL, next_opts.CFL * cfg.cfl_shrink);
+    end
+
+    if isfield(next_opts, 'history_dt') && next_opts.history_dt > 0
+        next_opts.history_dt = next_opts.history_dt * cfg.history_shrink;
+    end
+
+    next_opts.wall  = upscale_cells(get_opt_struct(next_opts, 'wall'),  cfg.factor);
+    next_opts.fluid = upscale_cells(get_opt_struct(next_opts, 'fluid'), cfg.factor);
+
+    adj = struct('CFL', get_opt(next_opts,'CFL',[]), ...
+        'wall_cells', get_opt(next_opts.wall,'cells',[]), ...
+        'fluid_cells', get_opt(next_opts.fluid,'cells',[]));
+end
+
+function s = get_opt_struct(opts, field)
+    if isstruct(opts) && isfield(opts, field) && ~isempty(opts.(field))
+        s = opts.(field);
+    else
+        s = struct();
+    end
+end
+
+function sub = upscale_cells(sub, factor)
+%UPSCALE_CELLS Ensure cell count increases by refinement factor.
+
+    if ~isstruct(sub)
+        sub = struct();
+    end
+    curr_cells = get_opt(sub, 'cells', []);
+    if isempty(curr_cells)
+        curr_cells = get_opt(sub, 'min_cells', []);
+        if isempty(curr_cells)
+            curr_cells = 400;
+        end
+    end
+    new_cells = max(curr_cells + 2, ceil(curr_cells * factor));
+    sub.cells = new_cells;
+    sub.min_cells = max(get_opt(sub, 'min_cells', 0), new_cells);
 end

@@ -36,22 +36,27 @@ function plot_flux(caseX, R_c, t_max)
                 xline(seed_t, 'Color',[0.4 0.4 0.4], 'LineStyle',':', 'LineWidth',1.0, ...
                     'DisplayName','Seed time (explicit)');
             end
+            warn_if_flux_unbounded(num_struct, 'explicit flux');
         else
             if isfield(num_struct,'explicit')
-                [th, qh, seed_t, label] = extract_flux(num_struct.explicit, 'Explicit (const R_c)');
+                snap_exp = num_struct.explicit;
+                [th, qh, seed_t, label] = extract_flux(snap_exp, 'Explicit (const R_c)');
                 plot(th, qh, '-', 'LineWidth',1.6, 'Color',[0.95 0.65 0.2], 'DisplayName', label);
                 if seed_t > 0
                     xline(seed_t, 'Color',[0.4 0.4 0.4], 'LineStyle',':', 'LineWidth',1.0, ...
                         'DisplayName','Seed time (explicit)');
                 end
+                warn_if_flux_unbounded(snap_exp, 'explicit flux');
             end
             if isfield(num_struct,'enthalpy')
-                [thH, qhH, seedH, labelH] = extract_flux(num_struct.enthalpy, 'Enthalpy (const R_c)');
+                snap_ent = num_struct.enthalpy;
+                [thH, qhH, seedH, labelH] = extract_flux(snap_ent, 'Enthalpy (const R_c)');
                 plot(thH, qhH, '--', 'LineWidth',1.5, 'Color',[0.3 0.75 0.93], 'DisplayName', labelH);
                 if seedH > 0
                     xline(seedH, 'Color',[0.1 0.5 0.7], 'LineStyle',':', 'LineWidth',1.0, ...
                         'DisplayName','Seed time (enthalpy)');
                 end
+                warn_if_flux_unbounded(snap_ent, 'enthalpy flux');
             end
         end
     end
@@ -60,6 +65,24 @@ function plot_flux(caseX, R_c, t_max)
     title(['Interface flux vs time — ', caseX.label]);
     legend('Location','SouthEast');
     xlim([0, t_max]);
+end
+
+function warn_if_flux_unbounded(snap, label)
+    if ~isstruct(snap)
+        return;
+    end
+    if isfield(snap, 'meta') && isstruct(snap.meta) && isfield(snap.meta, 'bounds')
+        b = snap.meta.bounds;
+        if isstruct(b) && isfield(b,'ok') && ~b.ok
+            flux_violation = NaN;
+            if isfield(b,'flux') && isstruct(b.flux) && isfield(b.flux,'max_violation')
+                flux_violation = b.flux.max_violation;
+            end
+            warning('plot_flux:NotBounded', ...
+                'Numerical %s exceeds VAM flux envelope (Δq=%g W/m^2).', ...
+                label, flux_violation);
+        end
+    end
 end
 
 function [th, qh, seed_t, label] = extract_flux(snap, base_label)

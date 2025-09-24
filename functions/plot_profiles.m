@@ -17,11 +17,13 @@ function plot_profiles(caseX)
             xn = num_struct.x;  Tn = num_struct.T;  Sn = num_struct.S;
             plot(xn, Tn, '.', 'MarkerSize', 6, 'DisplayName','Explicit numeric');
             xline(Sn, 'm--','LineWidth',1.2, 'DisplayName','S^{num}');
+            warn_if_unbounded(num_struct, 'numeric profile');
         else
             if isfield(num_struct,'explicit')
                 snap = num_struct.explicit;
                 plot(snap.x, snap.T, '.', 'MarkerSize', 6, 'DisplayName','Explicit numeric');
                 xline(snap.S, 'm--','LineWidth',1.2, 'DisplayName','S^{num}_{exp}');
+                warn_if_unbounded(snap, 'explicit profile');
             end
             if isfield(num_struct,'enthalpy')
                 snapH = num_struct.enthalpy;
@@ -29,6 +31,7 @@ function plot_profiles(caseX)
                     'MarkerFaceColor','none', 'MarkerEdgeColor',[0.3 0.75 0.93], ...
                     'DisplayName','Enthalpy numeric');
                 xline(snapH.S, 'c-.','LineWidth',1.2, 'DisplayName','S^{num}_{enth}');
+                warn_if_unbounded(snapH, 'enthalpy profile');
             end
         end
     end
@@ -39,4 +42,26 @@ function plot_profiles(caseX)
     legend('Location','SouthEast');
     ylim([min([Tw Tf Tl_inf])-5, max([Tw Tf Tl_inf])+5]);
     xlim([min(x), max(x)]);
+end
+
+function warn_if_unbounded(snap, label)
+    if ~isstruct(snap)
+        return;
+    end
+    if isfield(snap, 'meta') && isstruct(snap.meta) && isfield(snap.meta, 'bounds')
+        b = snap.meta.bounds;
+        if isstruct(b) && isfield(b,'ok') && ~b.ok
+            profile_violation = NaN;
+            if isfield(b,'profile') && isstruct(b.profile) && isfield(b.profile,'max_violation')
+                profile_violation = b.profile.max_violation;
+            end
+            flux_violation = NaN;
+            if isfield(b,'flux') && isstruct(b.flux) && isfield(b.flux,'max_violation')
+                flux_violation = b.flux.max_violation;
+            end
+            warning('plot_profiles:NotBounded', ...
+                'Numerical %s exceeds VAM envelope (ΔT=%g°C, Δq=%g W/m^2).', ...
+                label, profile_violation, flux_violation);
+        end
+    end
 end

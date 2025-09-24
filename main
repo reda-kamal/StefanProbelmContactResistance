@@ -234,8 +234,8 @@ Lw = max(5*sqrt(aw*t_end), 2e-3);
 Lf = max(5*sqrt(max(as,al)*t_end), 2e-3);
 
 % Grids (cell-centred; first nodes at ±Δx/2)
-Nw = 10000; dxw = Lw/Nw;   xw = -((1:Nw)' - 0.5)*dxw;  % 0^- at +dxw/2
-Nf = 8000; dxf = Lf/Nf;   xf =  ((1:Nf)' - 0.5)*dxf;  % 0^+ at +dxf/2
+Nw = 2000; dxw = Lw/Nw;   xw = -((1:Nw)' - 0.5)*dxw;  % 0^- at +dxw/2
+Nf = 2000; dxf = Lf/Nf;   xf =  ((1:Nf)' - 0.5)*dxf;  % 0^+ at +dxf/2
 
 % ICs
 Tw   = Tw_inf*ones(Nw,1);
@@ -248,7 +248,7 @@ S_real = m0*dxf;
 Tfld(1:m0) = Tf;
 
 % Explicit time step (CFL)
-CFL = 0.05;
+CFL = 0.3;
 dt  = CFL * min( dxw^2/(2*aw), dxf^2/(2*max(as,al)) );
 nsteps = max(1, ceil(t_end/dt));
 dt = min(dt, t_end/nsteps);

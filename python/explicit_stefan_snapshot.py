@@ -323,6 +323,31 @@ def explicit_stefan_snapshot(k_w: float, rho_w: float, c_w: float,
             front_err_l[ksave-1] = Tl_int - Tf if Tl_int == Tl_int else float('nan')
             last_save_time = t_rel
 
+    m_final = max(0, min(Nf - 1, int(math.floor(S_real / dxf)))) if Nf > 0 else 0
+    solid_end_final = m_final - 1
+    liquid_start_final = m_final
+
+    grad_s_final, grad_l_final = _stefan_gradients(
+        Tfld, dxf, Tf, S_real, solid_end_final, liquid_start_final,
+    )
+    Ts_int_final, Tl_int_final = _interface_temps_from_gradients(
+        Tfld, dxf, S_real, grad_s_final, grad_l_final,
+        solid_end_final, liquid_start_final,
+    )
+
+    rc_final = rc_eval(t_phys)
+    denom_final = Rw + rc_final + Rs
+    if abs(denom_final) < 1e-18:
+        q_half_final = 0.0
+    else:
+        q_half_final = (Tw[0] - Tfld[0]) / denom_final
+    Tw_face_final_raw = Tw[0] - Rw * q_half_final
+    Ts_face_final_raw = Tfld[0] + Rs * q_half_final
+    solid_cells_final = max(1, m_final)
+    Tw_face_final = _face_temperature(Tw, Tw_face_final_raw, 'wall')
+    Ts_face_final = _face_temperature(Tfld, Ts_face_final_raw, 'solid', solid_cells_final)
+    q_contact_final = _contact_flux(Tw_face_final, Ts_face_final, q_half_final, rc_final)
+
     snap = Snapshot()
     snap['x'] = xw + xf
     snap['T'] = Tw + Tfld
@@ -369,6 +394,39 @@ def explicit_stefan_snapshot(k_w: float, rho_w: float, c_w: float,
         'S': front_hist,
         'solid_delta': front_err_s,
         'liquid_delta': front_err_l,
+    }
+    snap['cells'] = {
+        'wall': {'x': list(xw), 'T': list(Tw)},
+        'fluid': {'x': list(xf), 'T': list(Tfld), 'solid_count': m_final},
+    }
+    snap['faces'] = {
+        'wall': {
+            'x': 0.0,
+            'Tw': Tw_face_final,
+            'Ts': Ts_face_final,
+            'q': q_contact_final,
+            'R_c': rc_final,
+            'Rw': Rw,
+            'Rs': Rs,
+        },
+        'interface': {
+            'x': S_real,
+            'Tf': Tf,
+            'Ts': Ts_int_final,
+            'Tl': Tl_int_final,
+            'solid_grad': grad_s_final,
+            'liquid_grad': grad_l_final,
+            'index': m_final,
+        },
+    }
+    snap['interface'] = {
+        'x': S_real,
+        'Tf': Tf,
+        'Ts': Ts_int_final,
+        'Tl': Tl_int_final,
+        'solid_grad': grad_s_final,
+        'liquid_grad': grad_l_final,
+        'index': m_final,
     }
     if rc_meta is not None:
         snap['q_meta'] = rc_meta

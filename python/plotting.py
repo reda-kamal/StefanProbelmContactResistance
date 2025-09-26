@@ -52,8 +52,15 @@ def plot_profiles(case: Dict[str, object]) -> None:
             if isinstance(candidate, dict):
                 explicit = candidate  # type: ignore[assignment]
     if isinstance(explicit, dict):
-        ax.plot(list(explicit['x']), list(explicit['T']), '.', markersize=6,
-                label='Explicit numeric')
+        line_x, line_T = _reconstruct_numeric_profile(explicit, params)
+        color = (0.60, 0.00, 0.80)
+        if line_x and line_T and any(not math.isnan(xx) for xx in line_x):
+            ax.plot(line_x, line_T, color=color, linewidth=1.6, label='Explicit numeric')
+            ax.plot(list(explicit['x']), list(explicit['T']), '.', markersize=4,
+                    color=color, alpha=0.6, label='_nolegend_')
+        else:
+            ax.plot(list(explicit['x']), list(explicit['T']), '.', markersize=6,
+                    color=color, label='Explicit numeric')
         if 'S' in explicit:
             ax.axvline(explicit['S'], color='m', linestyle='--', linewidth=1.2,
                        label=r'$S^{num}_{exp}$')
@@ -424,6 +431,118 @@ def _extract_flux(snap: Dict[str, object], base_label: str) -> Tuple[List[float]
         label = f"{base_label} ({history['flux_window']}-pt mov. avg.)"
 
     return th, qh, seed_t, label
+
+
+def _reconstruct_numeric_profile(explicit: Dict[str, object],
+                                 params: Dict[str, float]) -> Tuple[List[float], List[float]]:
+    grid = explicit.get('grid') if isinstance(explicit, dict) else None
+    if not isinstance(grid, dict):
+        return [], []
+
+    try:
+        Nw = int(grid.get('N_wall', 0) or 0)
+        Nf = int(grid.get('N_fluid', 0) or 0)
+    except (TypeError, ValueError):
+        return [], []
+
+    x_raw = explicit.get('x')
+    T_raw = explicit.get('T')
+    try:
+        x_cells = [float(val) for val in x_raw]  # type: ignore[arg-type]
+        T_cells = [float(val) for val in T_raw]  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return [], []
+
+    if len(x_cells) != len(T_cells) or len(x_cells) != (Nw + Nf) or Nw <= 0 or Nf <= 0:
+        return [], []
+
+    dxf_raw = grid.get('dx_fluid', 0.0)
+    try:
+        dxf = float(dxf_raw)
+    except (TypeError, ValueError):
+        return [], []
+    if not math.isfinite(dxf) or dxf <= 0.0:
+        return [], []
+
+    S = explicit.get('S')
+    try:
+        S_val = float(S)
+    except (TypeError, ValueError):
+        return [], []
+
+    m = max(1, min(Nf - 1, int(math.floor(S_val / dxf))))
+
+    x_wall = [float(val) for val in x_cells[:Nw]]
+    T_wall = [float(val) for val in T_cells[:Nw]]
+    x_fluid = [float(val) for val in x_cells[Nw:]]
+    T_fluid = [float(val) for val in T_cells[Nw:]]
+
+    x_solid = x_fluid[:m]
+    T_solid = T_fluid[:m]
+    x_liquid = x_fluid[m:]
+    T_liquid = T_fluid[m:]
+
+    Tw_face = _final_face_temp(explicit, 'Tw')
+    if Tw_face is None:
+        Tw_face = T_wall[0] if x_wall else float(params.get('Tw_inf', 0.0))
+
+    Ts_face = _final_face_temp(explicit, 'Ts')
+    Tf_val = float(params.get('Tf', 0.0))
+    if Ts_face is None:
+        Ts_face = Tf_val
+
+    line_x: List[float] = []
+    line_T: List[float] = []
+
+    line_x.extend(x_wall)
+    line_T.extend(T_wall)
+    line_x.append(0.0)
+    line_T.append(Tw_face)
+    line_x.append(math.nan)
+    line_T.append(math.nan)
+
+    line_x.append(0.0)
+    line_T.append(Ts_face)
+    line_x.extend(x_solid)
+    line_T.extend(T_solid)
+    line_x.append(S_val)
+    line_T.append(Tf_val)
+    line_x.append(math.nan)
+    line_T.append(math.nan)
+
+    line_x.append(S_val)
+    line_T.append(Tf_val)
+    line_x.extend(x_liquid)
+    line_T.extend(T_liquid)
+
+    return line_x, line_T
+
+
+def _final_face_temp(explicit: Dict[str, object], which: str) -> float | None:
+    faces = explicit.get('faces') if isinstance(explicit, dict) else None
+    if isinstance(faces, dict):
+        wall = faces.get('wall')
+        if isinstance(wall, dict):
+            val = wall.get('Tw' if which == 'Tw' else 'Ts')
+            if isinstance(val, (int, float)) and math.isfinite(val):
+                return float(val)
+
+    q_struct = explicit.get('q') if isinstance(explicit, dict) else None
+    key = 'Tw_face' if which == 'Tw' else 'Ts_face'
+    if isinstance(q_struct, dict):
+        arr = q_struct.get(key)
+        if isinstance(arr, (list, tuple)):
+            for item in reversed(arr):
+                try:
+                    val = float(item)
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(val):
+                    return val
+        elif isinstance(arr, (int, float)) and math.isfinite(arr):
+            return float(arr)
+
+    return None
 
 
 def _is_finite(val: object) -> bool:

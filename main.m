@@ -75,6 +75,7 @@ plot_profiles(caseA);
 plot_diff_profile(caseA);
 plot_conductance(caseA, R_c, 0.1);          % window you can change
 plot_flux(caseA, R_c, 0.1);                  % one call per case, correct Rc
+plot_front_history(caseA);
 
 plot_profiles(caseB);
 plot_diff_profile(caseB);

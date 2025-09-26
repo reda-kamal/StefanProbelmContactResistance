@@ -202,6 +202,67 @@ def plot_flux(case: Dict[str, object], R_c: float, t_max: float | None = None) -
     ax.set_xlim(0.0, t_max)
 
 
+def plot_variable_contact_flux(case: Dict[str, object], t_max: float | None = None) -> None:
+    """Compare VAM flux envelopes with numerical runs using variable R_c(t)."""
+
+    if not _ensure_matplotlib('variable-contact flux'):
+        return
+
+    num_struct = case.get('num')
+    if not isinstance(num_struct, dict):
+        warnings.warn('No numerical data available for variable-contact flux plot.', RuntimeWarning)
+        return
+
+    var_struct = num_struct.get('variable') if isinstance(num_struct, dict) else None
+    if not isinstance(var_struct, dict):
+        warnings.warn('Variable-contact snapshots not present in case data.', RuntimeWarning)
+        return
+
+    params: Dict[str, float] = case['params']  # type: ignore[assignment]
+
+    if t_max is None:
+        t_max = _infer_tmax(case)
+    if t_max is None:
+        t_max = 0.1
+
+    fig, ax = plt.subplots(num=f"Variable-contact flux — {case['label']}")
+    ax.grid(True)
+
+    entries = [
+        ('early', 'VAM$^{(0)}$', 'Explicit (VAM $R_c^{(0)}$)', 'k'),
+        ('late', 'VAM$^{(\infty)}$', 'Explicit (VAM $R_c^{(\infty)}$)', 'b'),
+    ]
+
+    for which, label_analytic, label_numeric, color in entries:
+        snap = var_struct.get(which)
+        if not isinstance(snap, dict):
+            continue
+        q_struct = snap.get('q') if isinstance(snap, dict) else None
+        if not isinstance(q_struct, dict):
+            continue
+        t_hist = q_struct.get('t_phys') or q_struct.get('t')
+        q_hist = q_struct.get('val')
+        rc_hist = q_struct.get('R_c')
+        if not (isinstance(t_hist, list) and isinstance(q_hist, list) and isinstance(rc_hist, list)):
+            continue
+        t_vals = [float(v) for v in t_hist]
+        if not t_vals:
+            continue
+        q_vals = [float(v) for v in q_hist]
+        rc_vals = [float(v) for v in rc_hist]
+        rc_spec = {'times': t_vals, 'values': rc_vals}
+        _, _, q_vam = vam_face_temps_and_q(params, which, t_vals, rc_spec)
+        ax.plot(t_vals, q_vam, linestyle='--', linewidth=1.4, color=color, label=label_analytic)
+        ax.plot(t_vals, q_vals, linestyle='-', linewidth=1.6, color=color, alpha=0.65,
+                label=label_numeric)
+
+    ax.set_xlabel('time t [s]')
+    ax.set_ylabel(r'interface heat flux q(0,t) [W m$^{-2}$]')
+    ax.set_xlim(0.0, t_max)
+    ax.set_title(f"Variable-contact comparison — {case['label']}")
+    ax.legend(loc='lower right')
+
+
 def _infer_tmax(case: Dict[str, object]) -> float | None:
     num_struct = case.get('num')
     if not isinstance(num_struct, dict):

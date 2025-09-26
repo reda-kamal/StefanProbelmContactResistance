@@ -10,13 +10,13 @@ try:
     from .stefan_eqs import stefan_eqs
     from .options import get_opt
     from .explicit_stefan_snapshot import explicit_stefan_snapshot
-    from .vam_face_temps_and_q import vam_face_temps_and_q
+    from .vam_face_temps_and_q import vam_face_temps_and_q, vam_contact_resistance
 except ImportError:  # pragma: no cover - allow running as a loose script
     from numerics import fsolve2  # type: ignore
     from stefan_eqs import stefan_eqs  # type: ignore
     from options import get_opt  # type: ignore
     from explicit_stefan_snapshot import explicit_stefan_snapshot  # type: ignore
-    from vam_face_temps_and_q import vam_face_temps_and_q  # type: ignore
+    from vam_face_temps_and_q import vam_face_temps_and_q, vam_contact_resistance  # type: ignore
 
 
 class CaseResult(dict):
@@ -32,6 +32,7 @@ def run_vam_case(label: str, k_w: float, rho_w: float, c_w: float,
     profile_pts_per_seg = get_opt(opts, 'profile_pts_per_seg', 400)
     profile_extent_factor = get_opt(opts, 'profile_extent_factor', 5)
     explicit_opts = get_opt(opts, 'explicit', {})
+    variable_contact_cfg = get_opt(explicit_opts, 'variable_contact', True)
 
     k_s = M['k_s']; rho_s = M['rho_s']; c_s = M['c_s']
     k_l = M['k_l']; rho_l = M['rho_l']; c_l = M['c_l']
@@ -129,6 +130,32 @@ def run_vam_case(label: str, k_w: float, rho_w: float, c_w: float,
     )
     snap_explicit['meta'] = meta_explicit
 
+    variable_snaps = None
+    if variable_contact_cfg:
+        final_opts = meta_explicit.get('options', explicit_opts)
+
+        rc_time_hist = []
+        if isinstance(snap_explicit.get('q'), dict):
+            q_struct = snap_explicit['q']  # type: ignore[assignment]
+            if isinstance(q_struct.get('t_phys'), list):
+                rc_time_hist = [float(val) for val in q_struct['t_phys']]  # type: ignore
+        if not rc_time_hist:
+            rc_time_hist = linspace(0.0, t_phys, 200)
+
+        rc_early = vam_contact_resistance({**params_struct, 'k_w': k_w, 'k_s': k_s}, 'early', rc_time_hist)
+        rc_late = vam_contact_resistance({**params_struct, 'k_w': k_w, 'k_s': k_s}, 'late', rc_time_hist)
+
+        rc_spec_early = {'times': rc_time_hist, 'values': rc_early}
+        rc_spec_late = {'times': rc_time_hist, 'values': rc_late}
+
+        snap_var_early = explicit_stefan_snapshot(
+            k_w, rho_w, c_w, M, rc_spec_early, t_phys, params_struct, final_opts,
+        )
+        snap_var_late = explicit_stefan_snapshot(
+            k_w, rho_w, c_w, M, rc_spec_late, t_phys, params_struct, final_opts,
+        )
+        variable_snaps = {'early': snap_var_early, 'late': snap_var_late}
+
     out = CaseResult()
     out['label'] = label
     out['params'] = params_struct
@@ -136,7 +163,10 @@ def run_vam_case(label: str, k_w: float, rho_w: float, c_w: float,
     out['Te'] = Te
     out['Tl'] = Tl
     out['Tdiff'] = Tdiff
-    out['num'] = {'explicit': snap_explicit}
+    num_dict = {'explicit': snap_explicit}
+    if variable_snaps:
+        num_dict['variable'] = variable_snaps
+    out['num'] = num_dict
     out['diagnostics'] = {'explicit': meta_explicit}
     return out
 

@@ -11,6 +11,7 @@ try:
         plot_diff_profile,
         plot_flux,
         plot_profiles,
+        plot_variable_contact_flux,
     )
 except ImportError:  # pragma: no cover - support running directly via PyCharm/CLI
     if __package__ is None or __package__ == "":
@@ -23,6 +24,7 @@ except ImportError:  # pragma: no cover - support running directly via PyCharm/C
         plot_diff_profile,
         plot_flux,
         plot_profiles,
+        plot_variable_contact_flux,
     )
 
 
@@ -50,8 +52,12 @@ def main(show_plots: bool = True) -> None:
             'min_CFL': 0.05,
         },
     }
-    sim_opts = {
-        'explicit': explicit_opts,
+    sim_opts_water = {
+        'explicit': {**explicit_opts},
+        'profile_pts_per_seg': 400,
+    }
+    sim_opts_tin = {
+        'explicit': {**explicit_opts, 'variable_contact': False},
         'profile_pts_per_seg': 400,
     }
 
@@ -73,8 +79,8 @@ def main(show_plots: bool = True) -> None:
         'Tf': 231.93, 'Tw_inf': 50.0, 'Tl_inf': 226.93,
     }
 
-    caseA = run_vam_case('Water/Ice + Sapphire', k_w, rho_w, c_w, A, R_c, t_phys, sim_opts)
-    caseB = run_vam_case('Tin (liq/sol) + Sapphire', k_w, rho_w, c_w, B, R_c, t_phys, sim_opts)
+    caseA = run_vam_case('Water/Ice + Sapphire', k_w, rho_w, c_w, A, R_c, t_phys, sim_opts_water)
+    caseB = run_vam_case('Tin (liq/sol) + Sapphire', k_w, rho_w, c_w, B, R_c, t_phys, sim_opts_tin)
 
     cases = (caseA, caseB)
     for case in cases:
@@ -94,6 +100,7 @@ def main(show_plots: bool = True) -> None:
         plot_diff_profile(case)
         plot_conductance(case, R_c, 0.1)
         plot_flux(case, R_c, 0.1)
+        plot_variable_contact_flux(case, 0.1)
 
     if show_plots:
         try:

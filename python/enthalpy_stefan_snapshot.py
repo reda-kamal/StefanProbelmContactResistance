@@ -1,7 +1,7 @@
-"""Explicit finite-difference snapshot for the three-domain Stefan problem."""
+"""Enthalpy-based solver mirroring the MATLAB implementation."""
 from __future__ import annotations
 import math
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 try:
     from .options import get_opt, get_struct
@@ -12,10 +12,10 @@ except ImportError:  # pragma: no cover - allow running as a loose script
 
 
 class Snapshot(dict):
-    """Simple dictionary-based container."""
+    pass
 
 
-def explicit_stefan_snapshot(k_w: float, rho_w: float, c_w: float,
+def enthalpy_stefan_snapshot(k_w: float, rho_w: float, c_w: float,
                              M: Dict[str, float], R_c: float,
                              t_end: float, params: Dict[str, float],
                              opts: Dict[str, object] | None = None) -> Snapshot:
@@ -24,7 +24,7 @@ def explicit_stefan_snapshot(k_w: float, rho_w: float, c_w: float,
 
     k_s = M['k_s']; rho_s = M['rho_s']; c_s = M['c_s']
     k_l = M['k_l']; rho_l = M['rho_l']; c_l = M['c_l']
-    L = M['L']; Tf = M['Tf']; Tw_inf = M['Tw_inf']; Tl_inf = M['Tl_inf']
+    Tf = M['Tf']; Tw_inf = M['Tw_inf']; Tl_inf = M['Tl_inf']
 
     aw = k_w/(rho_w*c_w)
     as_ = k_s/(rho_s*c_s)
@@ -156,34 +156,39 @@ def explicit_stefan_snapshot(k_w: float, rho_w: float, c_w: float,
         else:
             Tfld.append(Tl_inf + (Tf - Tl_inf) * (math.erf((x + S0_e) / den_l_e) - 1.0) / (erf_mu - 1.0))
 
-    S_real = max(dxf, min((Nf - 1) * dxf, Se_seed))
+    S_seed = max(dxf, min((Nf - 1) * dxf, Se_seed))
 
-    seed_info = {
-        'Se_vam': Se_seed,
-        'time': seed_time,
-        'thickness': S_real,
-        'cell_width': dxf,
-    }
+    rhoLcpL = rho_l * c_l
+    rhoScpS = rho_s * c_s
+    L_vol = rho_s * M['L']
 
-    t_phys = seed_time
-    t_rel = 0.0
-    sim_duration = max(t_end - seed_time, 0.0)
+    H = []
+    for j in range(Nf):
+        if xf[j] <= Se_seed:
+            H.append(-L_vol + rhoScpS * (Tfld[j] - Tf))
+        else:
+            H.append(rhoLcpL * (Tfld[j] - Tl_inf))
 
     CFL = get_opt(opts, 'CFL', 0.3)
-    dt_base = CFL * min(dxw * dxw / (2 * aw), dxf * dxf / (2 * max(as_, al)))
+    alpha_max = max(as_, al)
+    dt_base = CFL * min(dxw * dxw / (2 * aw), dxf * dxf / (2 * alpha_max))
+    sim_duration = max(t_end - seed_time, 0.0)
     if sim_duration <= 0:
         nsteps = 0
         dt_base = 0.0
     else:
         nsteps = max(1, math.ceil(sim_duration / dt_base))
         dt_base = min(dt_base, sim_duration / nsteps)
+
     t_elapsed = 0.0
+    t_phys = seed_time
+    t_rel = 0.0
+
+    coeff = {'wall_bulk': aw * dt_base / (dxw * dxw) if dxw else 0.0,
+             'wall_edge': 2 * aw * dt_base / (dxw * dxw) if dxw else 0.0}
+    curr_dt = dt_base
 
     Rw = dxw / (2 * k_w)
-    Rs = dxf / (2 * k_s)
-
-    coeff = _local_coeffs(dt_base, aw, as_, al, dxw, dxf)
-    curr_dt = dt_base
 
     if history_dt and history_dt > 0:
         n_hist_max = max(2, math.ceil(sim_duration / history_dt) + 2)
@@ -198,9 +203,8 @@ def explicit_stefan_snapshot(k_w: float, rho_w: float, c_w: float,
     ksave = 0
     last_save_time = -1e30
 
-    q_seed = (Tw[0] - Tfld[0]) / (Rw + R_c + Rs)
-    Tw_face_seed = Tw[0] - Rw * q_seed
-    Ts_face_seed = Tfld[0] + Rs * q_seed
+    Tfluid, phi_liq, k_cell = enthalpy_state(H, Tf, Tl_inf, rhoLcpL, rhoScpS, k_l, k_s, L_vol)
+    q_seed, Tw_face_seed, Ts_face_seed = contact_flux(Tw[0], Tfluid[0], phi_liq[0], Tf, Rw, R_c, dxf, k_cell[0])
     ksave += 1
     t_hist[ksave-1] = t_rel
     q_hist[ksave-1] = (Tw_face_seed - Ts_face_seed) / R_c
@@ -213,77 +217,41 @@ def explicit_stefan_snapshot(k_w: float, rho_w: float, c_w: float,
         if dt_step <= 0:
             break
         if abs(dt_step - curr_dt) > 1e-15:
-            coeff = _local_coeffs(dt_step, aw, as_, al, dxw, dxf)
+            coeff = {'wall_bulk': aw * dt_step / (dxw * dxw) if dxw else 0.0,
+                     'wall_edge': 2 * aw * dt_step / (dxw * dxw) if dxw else 0.0}
             curr_dt = dt_step
 
-        m = max(1, min(Nf - 1, int(math.floor(S_real / dxf))))
-        solid_end = m - 1  # python index of last solid cell
-        liquid_start = m   # python index of first liquid cell
-
-        q0 = (Tw[0] - Tfld[0]) / (Rw + R_c + Rs)
-        Tw_face = Tw[0] - Rw * q0
-        Ts_face = Tfld[0] + Rs * q0
+        Tfluid, phi_liq, k_cell = enthalpy_state(H, Tf, Tl_inf, rhoLcpL, rhoScpS, k_l, k_s, L_vol)
+        q0, Tw_face, Ts_face = contact_flux(Tw[0], Tfluid[0], phi_liq[0], Tf, Rw, R_c, dxf, k_cell[0])
 
         Tw_new = Tw[:]
         if Nw >= 2:
             Tw_new[0] = Tw[0] + coeff['wall_edge'] * (Tw_face - 2 * Tw[0] + Tw[1])
         if Nw > 2:
             for j in range(1, Nw - 1):
-                Tw_new[j] = Tw[j] + coeff['wall_bulk'] * (Tw[j+1] - 2 * Tw[j] + Tw[j-1])
+                Tw_new[j] = Tw[j] + coeff['wall_bulk'] * (Tw[j+1] - 2*Tw[j] + Tw[j-1])
         Tw_new[-1] = Tw_inf
         Tw = Tw_new
 
-        Tn = Tfld[:]
-        if Nf >= 2:
-            Tn[0] = Tfld[0] + coeff['solid_edge'] * (Tfld[1] - 2 * Tfld[0] + Ts_face)
-        if solid_end >= 1:
-            for j in range(1, solid_end):
-                Tn[j] = Tfld[j] + coeff['solid_bulk'] * (Tfld[j+1] - 2*Tfld[j] + Tfld[j-1])
-        if solid_end >= 0:
-            neighbor = Ts_face if solid_end == 0 else Tfld[solid_end - 1]
-            lap_m = coeff['near_face_coeff'] * (neighbor - 3 * Tfld[solid_end] + 2 * Tf)
-            Tn[solid_end] = Tfld[solid_end] + coeff['as_dt'] * lap_m
-        if liquid_start < Nf:
-            if liquid_start + 1 < Nf:
-                lap_mp1 = coeff['near_face_coeff'] * (Tfld[liquid_start + 1] - 3 * Tfld[liquid_start] + 2 * Tf)
-                Tn[liquid_start] = Tfld[liquid_start] + coeff['al_dt'] * lap_mp1
-            else:
-                Tn[liquid_start] = Tf
-        if liquid_start + 1 < Nf - 0:
-            for j in range(liquid_start + 1, Nf - 1):
-                Tn[j] = Tfld[j] + coeff['liquid_bulk'] * (Tfld[j+1] - 2*Tfld[j] + Tfld[j-1])
-        Tn[-1] = Tl_inf
-        Tfld = Tn
+        q_faces = [0.0] * (Nf + 1)
+        q_faces[0] = q0
+        for j in range(Nf - 1):
+            k_face = harmonic_mean(k_cell[j], k_cell[j+1])
+            q_faces[j+1] = -k_face * (Tfluid[j+1] - Tfluid[j]) / dxf
+        k_last = max(k_cell[-1], 1e-12)
+        q_faces[Nf] = -k_last * (Tl_inf - Tfluid[-1]) / (0.5 * dxf)
 
-        if solid_end >= 1:
-            As_ = Tfld[solid_end] - Tf
-            Bs_ = Tfld[solid_end - 1] - Tf
-            grad_s = (Bs_ - 9 * As_) / (3 * dxf)
-        elif solid_end >= 0:
-            grad_s = coeff['two_over_dx'] * (Tf - Tfld[solid_end])
-        else:
-            grad_s = 0.0
-
-        if liquid_start + 1 < Nf:
-            Al_ = Tfld[liquid_start] - Tf
-            Bl_ = Tfld[liquid_start + 1] - Tf
-            grad_l = coeff['grad_upwind'] * (9 * Al_ - Bl_)
-        elif liquid_start < Nf:
-            grad_l = coeff['two_over_dx'] * (Tfld[liquid_start] - Tf)
-        else:
-            grad_l = 0.0
-
-        S_real = S_real + dt_step * (k_s * grad_s - k_l * grad_l) / (rho_s * L)
-        S_real = min((Nf - 1) * dxf, max(dxf, S_real))
+        for j in range(Nf):
+            qL = q_faces[j]
+            qR = q_faces[j+1]
+            H[j] = H[j] + dt_step * (qL - qR) / dxf
 
         t_elapsed += dt_step
         t_phys += dt_step
         t_rel = t_phys - seed_time
 
-        q1 = (Tw[0] - Tfld[0]) / (Rw + R_c + Rs)
-        Tw_face_new = Tw[0] - Rw * q1
-        Ts_face_new = Tfld[0] + Rs * q1
-        q_contact = (Tw_face_new - Ts_face_new) / R_c
+        Tfluid, phi_liq, k_cell = enthalpy_state(H, Tf, Tl_inf, rhoLcpL, rhoScpS, k_l, k_s, L_vol)
+        q_contact, Tw_face_new, Ts_face_new = contact_flux(Tw[0], Tfluid[0], phi_liq[0], Tf, Rw, R_c, dxf, k_cell[0])
 
         should_save = False
         if history_dt and history_dt > 0:
@@ -300,22 +268,23 @@ def explicit_stefan_snapshot(k_w: float, rho_w: float, c_w: float,
             Ts_face_hist[ksave-1] = Ts_face_new
             last_save_time = t_rel
 
+    Tfluid, phi_liq, k_cell = enthalpy_state(H, Tf, Tl_inf, rhoLcpL, rhoScpS, k_l, k_s, L_vol)
+
+    S_est = estimate_front(phi_liq, dxf)
+
     snap = Snapshot()
     snap['x'] = xw + xf
-    snap['T'] = Tw + Tfld
-    snap['S'] = S_real
+    snap['T'] = Tw + Tfluid
+    snap['Tw'] = Tw
+    snap['Tf'] = Tfluid
+    snap['H'] = H
+    snap['phi'] = phi_liq
+    snap['S'] = S_est
     snap['t'] = t_end
     snap['t_rel'] = t_rel
     snap['t_offset'] = seed_time
-    snap['seed'] = seed_info
-    snap['grid'] = {
-        'dx_wall': dxw,
-        'dx_fluid': dxf,
-        'N_wall': Nw,
-        'N_fluid': Nf,
-        'L_wall': Lw,
-        'L_fluid': Lf,
-    }
+    snap['seed'] = {'time': seed_time, 'thickness': S_seed, 'cell_width': dxf, 'Se_vam': Se_seed}
+    snap['grid'] = {'dx_wall': dxw, 'dx_fluid': dxf, 'N_wall': Nw, 'N_fluid': Nf, 'L_wall': Lw, 'L_fluid': Lf}
     snap['history'] = {'history_dt': history_dt, 'flux_window': flux_window, 'nsave': nsave}
 
     t_hist = t_hist[:ksave]
@@ -336,16 +305,70 @@ def explicit_stefan_snapshot(k_w: float, rho_w: float, c_w: float,
     return snap
 
 
-def _local_coeffs(dt: float, aw: float, as_: float, al: float, dxw: float, dxf: float) -> Dict[str, float]:
-    return {
-        'wall_bulk': aw * dt / (dxw * dxw) if dxw else 0.0,
-        'wall_edge': 2 * aw * dt / (dxw * dxw) if dxw else 0.0,
-        'solid_bulk': as_ * dt / (dxf * dxf) if dxf else 0.0,
-        'solid_edge': 2 * as_ * dt / (dxf * dxf) if dxf else 0.0,
-        'liquid_bulk': al * dt / (dxf * dxf) if dxf else 0.0,
-        'near_face_coeff': 4 / (3 * dxf * dxf) if dxf else 0.0,
-        'as_dt': as_ * dt,
-        'al_dt': al * dt,
-        'two_over_dx': 2 / dxf if dxf else 0.0,
-        'grad_upwind': 1 / (3 * dxf) if dxf else 0.0,
-    }
+def enthalpy_state(H: List[float], Tf: float, Tl_inf: float, rhoLcpL: float, rhoScpS: float,
+                   k_l: float, k_s: float, L_vol: float) -> Tuple[List[float], List[float], List[float]]:
+    H_tf = rhoLcpL * (Tf - Tl_inf)
+    N = len(H)
+    T = [0.0] * N
+    phi = [0.0] * N
+    k_cell = [0.0] * N
+    for j, Hj in enumerate(H):
+        if Hj >= H_tf:
+            T[j] = Tf + (Hj - H_tf) / rhoLcpL
+            phi[j] = 1.0
+            k_cell[j] = k_l
+        elif Hj >= 0.0:
+            T[j] = Tl_inf + Hj / rhoLcpL
+            phi[j] = 1.0
+            k_cell[j] = k_l
+        elif Hj >= -L_vol:
+            phi_j = max(0.0, min(1.0, 1.0 + Hj / L_vol))
+            phi[j] = phi_j
+            T[j] = Tf
+            k_cell[j] = phi_j * k_l + (1.0 - phi_j) * k_s
+        else:
+            T[j] = Tf + (Hj + L_vol) / rhoScpS
+            phi[j] = 0.0
+            k_cell[j] = k_s
+    return T, phi, k_cell
+
+
+def harmonic_mean(kL: float, kR: float) -> float:
+    if kL <= 0.0 and kR <= 0.0:
+        return 0.0
+    if kL <= 0.0:
+        return kR
+    if kR <= 0.0:
+        return kL
+    return 2 * kL * kR / (kL + kR)
+
+
+def contact_flux(Tw_cell: float, T_cell: float, phi_cell: float, Tf: float,
+                 Rw: float, R_c: float, dxf: float, k_cell: float) -> Tuple[float, float, float]:
+    phi_cell = max(0.0, min(1.0, phi_cell))
+    tol = 1e-8
+    if tol < phi_cell < 1.0 - tol:
+        q0 = (Tw_cell - Tf) / (Rw + R_c)
+        Tw_face = Tw_cell - Rw * q0
+        Ts_face = Tf
+    else:
+        k_eff = max(k_cell, 1e-12)
+        Rs_eff = dxf / (2 * k_eff)
+        q0 = (Tw_cell - T_cell) / (Rw + R_c + Rs_eff)
+        Tw_face = Tw_cell - Rw * q0
+        Ts_face = T_cell + Rs_eff * q0
+    return q0, Tw_face, Ts_face
+
+
+def estimate_front(phi_liq: List[float], dxf: float) -> float:
+    for idx, phi in enumerate(phi_liq):
+        if phi < 0.5:
+            if idx == 0:
+                return 0.5 * dxf
+            prev = phi_liq[idx - 1]
+            denom = max(prev - phi, 1e-12)
+            frac = (0.5 - prev) / denom
+            frac = max(0.0, min(1.0, frac))
+            pos = (idx - 0.5 + frac) * dxf
+            return max(dxf, min((len(phi_liq) - 1) * dxf, pos))
+    return max(dxf, (len(phi_liq) - 1) * dxf)

@@ -18,22 +18,21 @@ function plot_profiles(caseX)
             plot(xn, Tn, '.', 'MarkerSize', 6, 'DisplayName','Explicit numeric');
             xline(Sn, 'm--','LineWidth',1.2, 'DisplayName','S^{num}');
             warn_if_unbounded(num_struct, 'numeric profile');
-        elseif isfield(num_struct,'explicit')
-            snap = num_struct.explicit;
-            [x_line, T_line, x_pts, T_pts] = reconstruct_numeric_profile(snap, caseX.params);
-            explicit_color = [0.60, 0.00, 0.80];
-            if ~isempty(x_line)
-                plot(x_line, T_line, 'Color', explicit_color, 'LineWidth', 1.6, ...
-                    'DisplayName','Explicit numeric');
-                if ~isempty(x_pts)
-                    plot(x_pts, T_pts, '.', 'Color', explicit_color, 'MarkerSize', 5, ...
-                        'HandleVisibility','off');
-                end
-            else
+        else
+            if isfield(num_struct,'explicit')
+                snap = num_struct.explicit;
                 plot(snap.x, snap.T, '.', 'MarkerSize', 6, 'DisplayName','Explicit numeric');
+                xline(snap.S, 'm--','LineWidth',1.2, 'DisplayName','S^{num}_{exp}');
+                warn_if_unbounded(snap, 'explicit profile');
             end
-            xline(snap.S, 'm--','LineWidth',1.2, 'DisplayName','S^{num}_{exp}');
-            warn_if_unbounded(snap, 'explicit profile');
+            if isfield(num_struct,'enthalpy')
+                snapH = num_struct.enthalpy;
+                plot(snapH.x, snapH.T, 'o', 'MarkerSize', 4, 'LineStyle','none', ...
+                    'MarkerFaceColor','none', 'MarkerEdgeColor',[0.3 0.75 0.93], ...
+                    'DisplayName','Enthalpy numeric');
+                xline(snapH.S, 'c-.','LineWidth',1.2, 'DisplayName','S^{num}_{enth}');
+                warn_if_unbounded(snapH, 'enthalpy profile');
+            end
         end
     end
 
@@ -63,90 +62,6 @@ function warn_if_unbounded(snap, label)
             warning('plot_profiles:NotBounded', ...
                 'Numerical %s exceeds VAM envelope (ΔT=%g°C, Δq=%g W/m^2).', ...
                 label, profile_violation, flux_violation);
-        end
-    end
-end
-
-function [x_line, T_line, x_pts, T_pts] = reconstruct_numeric_profile(snap, params)
-%RECONSTRUCT_NUMERIC_PROFILE Build a piecewise profile with the freezing front.
-    x_line = [];
-    T_line = [];
-    x_pts = [];
-    T_pts = [];
-    if ~isstruct(snap) || ~isfield(snap,'x') || ~isfield(snap,'T')
-        return;
-    end
-
-    x_pts = snap.x(:);
-    T_pts = snap.T(:);
-
-    if ~isfield(snap,'grid') || ~isstruct(snap.grid) || ~isfield(snap,'S')
-        return;
-    end
-
-    Nw = snap.grid.N_wall;
-    Nf = snap.grid.N_fluid;
-    if isempty(Nw) || isempty(Nf) || numel(x_pts) ~= (Nw + Nf)
-        return;
-    end
-
-    xw = x_pts(1:Nw);
-    Tw = T_pts(1:Nw);
-    xf = x_pts(Nw+1:end);
-    Tf_cells = T_pts(Nw+1:end);
-
-    dxf = snap.grid.dx_fluid;
-    if isempty(dxf) || ~isfinite(dxf) || dxf <= 0
-        return;
-    end
-
-    m = max(1, min(Nf-1, floor(snap.S/dxf)));
-    x_solid = xf(1:m);
-    T_solid = Tf_cells(1:m);
-    x_liquid = xf(m+1:end);
-    T_liquid = Tf_cells(m+1:end);
-
-    Tw_face = final_face_temp(snap, 'Tw');
-    if isnan(Tw_face)
-        if ~isempty(Tw)
-            Tw_face = Tw(1);
-        else
-            Tw_face = params.Tw_inf;
-        end
-    end
-
-    Ts_face = final_face_temp(snap, 'Ts');
-    if isnan(Ts_face)
-        Ts_face = params.Tf;
-    end
-
-    Tf_val = params.Tf;
-
-    x_line = [xw; 0; NaN; 0; x_solid; snap.S; NaN; snap.S; x_liquid];
-    T_line = [Tw; Tw_face; NaN; Ts_face; T_solid; Tf_val; NaN; Tf_val; T_liquid];
-end
-
-function val = final_face_temp(snap, which)
-%FINAL_FACE_TEMP Extract the final wall face temperature for plotting.
-    val = NaN;
-    if isfield(snap,'faces') && isstruct(snap.faces) && isfield(snap.faces,'wall')
-        wall_face = snap.faces.wall;
-        if strcmp(which,'Tw') && isfield(wall_face,'Tw')
-            val = wall_face.Tw;
-            return;
-        elseif strcmp(which,'Ts') && isfield(wall_face,'Ts')
-            val = wall_face.Ts;
-            return;
-        end
-    end
-
-    if isfield(snap,'q') && isstruct(snap.q)
-        if strcmp(which,'Tw') && isfield(snap.q,'Tw_face') && ~isempty(snap.q.Tw_face)
-            val = snap.q.Tw_face(end);
-            return;
-        elseif strcmp(which,'Ts') && isfield(snap.q,'Ts_face') && ~isempty(snap.q.Ts_face)
-            val = snap.q.Ts_face(end);
-            return;
         end
     end
 end

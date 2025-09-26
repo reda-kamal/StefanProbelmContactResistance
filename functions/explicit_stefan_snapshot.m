@@ -244,30 +244,20 @@ else
 end
 t_hist = zeros(n_hist_max,1);
 q_hist = zeros(n_hist_max,1);
-R_hist = zeros(n_hist_max,1);
 Tw_face_hist = zeros(n_hist_max,1);
 Ts_face_hist = zeros(n_hist_max,1);
-S_hist = zeros(n_hist_max,1);
-Ts_err_hist = zeros(n_hist_max,1);
-Tl_err_hist = zeros(n_hist_max,1);
 ksave  = 0;
 last_save_time = -inf;
 
 % Record initial (seed) flux sample for diagnostics
-m = max(1, min(Nf-1, floor(S_real/dxf)));
-[~, ~, Ts_int0, Tl_int0] = stefan_gradients(Tfld, dxf, Tf, m, Nf);
 q_seed = (Tw(1) - Tfld(1)) / (Rw + R_c + Rs);
 Tw_face_seed = Tw(1) - Rw*q_seed;
 Ts_face_seed = Tfld(1) + Rs*q_seed;
 ksave = ksave + 1;
 t_hist(ksave) = t_rel;
 q_hist(ksave) = (Tw_face_seed - Ts_face_seed)/R_c;
-R_hist(ksave) = R_c;
 Tw_face_hist(ksave) = Tw_face_seed;
 Ts_face_hist(ksave) = Ts_face_seed;
-S_hist(ksave) = S_real;
-Ts_err_hist(ksave) = Ts_int0 - Tf;
-Tl_err_hist(ksave) = Tl_int0 - Tf;
 last_save_time = t_rel;
 
 for n = 1:nsteps
@@ -351,12 +341,26 @@ for n = 1:nsteps
     Tfld = Tn;
 
     % ===== Stefan update (one-sided slopes) =====
-    [grad_s, grad_l, Ts_int, Tl_int] = stefan_gradients(Tfld, dxf, Tf, m, Nf);
+    if m >= 2
+        As_ = Tfld(m)   - Tf;  Bs_ = Tfld(m-1) - Tf;
+        grad_s = (Bs_ - 9*As_) / (3*dxf);
+    elseif m >= 1
+        grad_s = coeff.two_over_dx * (Tf - Tfld(m));
+    else
+        grad_s = 0;
+    end
+
+    if m+2 <= Nf
+        Al_ = Tfld(m+1) - Tf;  Bl_ = Tfld(m+2) - Tf;
+        grad_l = coeff.grad_upwind * (9*Al_ - Bl_);
+    elseif m+1 <= Nf
+        grad_l = coeff.two_over_dx * (Tfld(m+1) - Tf);
+    else
+        grad_l = 0;
+    end
 
     S_real = S_real + dt_step * ( k_s*grad_s - k_l*grad_l ) / (rho_s*L);
     S_real = min( (Nf-1)*dxf, max( dxf, S_real ) );
-
-    m = max(1, min(Nf-1, floor(S_real/dxf)));
 
     % Advance clocks after the state has been updated
     t = t + dt_step;
@@ -385,12 +389,8 @@ for n = 1:nsteps
         ksave = ksave + 1;
         t_hist(ksave) = t_rel;
         q_hist(ksave) = q_contact;
-        R_hist(ksave) = R_c;
         Tw_face_hist(ksave) = Tw_face_new;
         Ts_face_hist(ksave) = Ts_face_new;
-        S_hist(ksave) = S_real;
-        Ts_err_hist(ksave) = Ts_int - Tf;
-        Tl_err_hist(ksave) = Tl_int - Tf;
         last_save_time = t_rel;
     end
 end
@@ -412,80 +412,16 @@ snap.history = struct('history_dt',history_dt,'flux_window',flux_window,...
 % Trim history to what we actually saved
 t_hist = t_hist(1:ksave);
 q_hist = q_hist(1:ksave);
-R_hist = R_hist(1:ksave);
 snap.q.t   = t_hist;
 snap.q.val = q_hist;
-snap.q.R_c = R_hist;
 snap.q.Tw_face = Tw_face_hist(1:ksave);
 snap.q.Ts_face = Ts_face_hist(1:ksave);
 snap.q.t_phys = t_hist + seed_time;
-
-S_hist = S_hist(1:ksave);
-Ts_err_hist = Ts_err_hist(1:ksave);
-Tl_err_hist = Tl_err_hist(1:ksave);
-snap.front = struct('t', t_hist, 't_phys', t_hist + seed_time, ...
-    'S', S_hist, 'solid_delta', Ts_err_hist, 'liquid_delta', Tl_err_hist);
-
-% Final interface diagnostics (face temperatures, gradients, etc.)
-[grad_s_final, grad_l_final, Ts_int_final, Tl_int_final] = ...
-    stefan_gradients(Tfld, dxf, Tf, m, Nf);
-
-q_final = (Tw(1) - Tfld(1)) / (Rw + R_c + Rs);
-Tw_face_final = Tw(1) - Rw*q_final;
-Ts_face_final = Tfld(1) + Rs*q_final;
-if abs(R_c) > eps(R_c)
-    q_contact_final = (Tw_face_final - Ts_face_final) / R_c;
-else
-    q_contact_final = q_final;
-end
-
-snap.cells = struct( ...
-    'wall', struct('x', xw, 'T', Tw), ...
-    'fluid', struct('x', xf, 'T', Tfld, 'solid_count', m) );
-
-snap.faces = struct( ...
-    'wall', struct('x', 0, 'Tw', Tw_face_final, 'Ts', Ts_face_final, ...
-        'q', q_contact_final, 'R_c', R_c, 'Rw', Rw, 'Rs', Rs), ...
-    'interface', struct('x', S_real, 'Tf', Tf, 'Ts', Ts_int_final, ...
-        'Tl', Tl_int_final, 'solid_grad', grad_s_final, ...
-        'liquid_grad', grad_l_final, 'cell_index', m) );
-
-snap.interface = struct('x', S_real, 'Tf', Tf, 'Ts', Ts_int_final, ...
-    'Tl', Tl_int_final, 'solid_grad', grad_s_final, ...
-    'liquid_grad', grad_l_final, 'cell_index', m);
 
 % Optional moving-average smoothing of the stored flux (for plotting only)
 if flux_window > 1
     snap.q.val = moving_average(snap.q.val, flux_window);
 end
-end
-
-function [grad_s, grad_l, Ts_int, Tl_int] = stefan_gradients(Tfld, dxf, Tf, m, Nf)
-%STEFAN_GRADIENTS Compute one-sided gradients and interface temps.
-
-    if m >= 1 && m <= Nf
-        if m >= 2
-            grad_s = ( (Tfld(m-1) - Tf) - 9*(Tfld(m) - Tf) ) / (3*dxf);
-        else
-            grad_s = 2*(Tf - Tfld(m)) / dxf;
-        end
-        Ts_int = Tfld(m) + grad_s*(dxf/2);
-    else
-        grad_s = 0;
-        Ts_int = Tf;
-    end
-
-    if (m+1) <= Nf
-        if (m+2) <= Nf
-            grad_l = ( 9*(Tfld(m+1) - Tf) - (Tfld(m+2) - Tf) ) / (3*dxf);
-        else
-            grad_l = 2*(Tfld(m+1) - Tf) / dxf;
-        end
-        Tl_int = Tfld(m+1) - grad_l*(dxf/2);
-    else
-        grad_l = 0;
-        Tl_int = Tf;
-    end
 end
 
 function coeff = local_coeffs(dt, aw, as, al, dxw, dxf)
@@ -498,6 +434,8 @@ function coeff = local_coeffs(dt, aw, as, al, dxw, dxf)
     coeff.near_face_coeff = 4/(3*dxf^2);
     coeff.as_dt = as*dt;
     coeff.al_dt = al*dt;
+    coeff.two_over_dx = 2/dxf;
+    coeff.grad_upwind = 1/(3*dxf);
 end
 
 function val = get_opt(opts, field, default)

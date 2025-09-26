@@ -70,13 +70,21 @@ def main(show_plots: bool = True) -> None:
         print(f"=== {case['label']} ===")
         params = case['params']
         print(f"lambda = {params['lam']:.5f}, Ti = {params['Ti']:.3f} C")
-        for method in ('explicit', 'enthalpy'):
-            snap = case['num'][method]
-            q_hist = snap['q']['val']
-            t_hist = snap['q']['t']
+        explicit = case['num'].get('explicit')  # type: ignore[assignment]
+        if isinstance(explicit, dict):
+            q_struct = explicit.get('q') if isinstance(explicit.get('q'), dict) else None
+            if q_struct is None:
+                q_struct = {}
+            q_hist = q_struct.get('val', [])  # type: ignore[assignment]
+            t_hist = q_struct.get('t', [])  # type: ignore[assignment]
             final_q = q_hist[-1] if q_hist else float('nan')
             final_t = t_hist[-1] if t_hist else float('nan')
-            print(f"  {method:9s} : S = {snap['S']:.6f} m at t={final_t:.4f} s, q={final_q:.2f} W/m^2")
+            print(
+                "  {method:9s} : S = {S:.6f} m at t={t:.4f} s, q={q:.2f} W/m^2".format(
+                    method='explicit', S=explicit.get('S', float('nan')),
+                    t=final_t, q=final_q
+                )
+            )
         print()
 
     for case in cases:

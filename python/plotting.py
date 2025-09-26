@@ -43,33 +43,14 @@ def plot_profiles(case: Dict[str, object]) -> None:
     ax.axvline(Sl, color='b', linestyle='--', linewidth=1.0, label=r'$S^{(\infty)}$')
 
     num_struct = case.get('num')  # type: ignore[assignment]
-    if isinstance(num_struct, dict) and num_struct:
-        if 'x' in num_struct and 'T' in num_struct:
-            xn = list(num_struct['x'])
-            Tn = list(num_struct['T'])
-            ax.plot(xn, Tn, '.', markersize=6, label='Explicit numeric')
-            if 'S' in num_struct:
-                ax.axvline(num_struct['S'], color='m', linestyle='--', linewidth=1.2,
-                           label=r'$S^{num}$')
-            _warn_if_unbounded(num_struct, 'numeric profile')
-        else:
-            explicit = num_struct.get('explicit') if isinstance(num_struct, dict) else None
-            if isinstance(explicit, dict):
-                ax.plot(list(explicit['x']), list(explicit['T']), '.', markersize=6,
-                        label='Explicit numeric')
-                if 'S' in explicit:
-                    ax.axvline(explicit['S'], color='m', linestyle='--', linewidth=1.2,
-                               label=r'$S^{num}_{exp}$')
-                _warn_if_unbounded(explicit, 'explicit profile')
-            enthalpy = num_struct.get('enthalpy') if isinstance(num_struct, dict) else None
-            if isinstance(enthalpy, dict):
-                ax.plot(list(enthalpy['x']), list(enthalpy['T']), 'o', markersize=4,
-                        markerfacecolor='none', markeredgecolor=(0.3, 0.75, 0.93),
-                        linestyle='none', label='Enthalpy numeric')
-                if 'S' in enthalpy:
-                    ax.axvline(enthalpy['S'], color='c', linestyle='-.', linewidth=1.2,
-                               label=r'$S^{num}_{enth}$')
-                _warn_if_unbounded(enthalpy, 'enthalpy profile')
+    explicit = _get_explicit_snapshot(num_struct)
+    if explicit:
+        ax.plot(list(explicit.get('x', [])), list(explicit.get('T', [])), '.',
+                markersize=6, label='Explicit numeric')
+        if 'S' in explicit:
+            ax.axvline(explicit['S'], color='m', linestyle='--', linewidth=1.2,
+                       label=r'$S^{num}_{exp}$')
+        _warn_if_unbounded(explicit, 'explicit profile')
 
     Tw = params['Tw_inf']
     Tf = params['Tf']
@@ -191,31 +172,14 @@ def plot_flux(case: Dict[str, object], R_c: float, t_max: float | None = None) -
     ax.plot(t, qI, 'b-', linewidth=1.7, label=r'VAM$^{(∞)}$: q = ΔT/R_c')
 
     num_struct = case.get('num')  # type: ignore[assignment]
-    if isinstance(num_struct, dict) and num_struct:
-        if 'q' in num_struct:
-            th, qh, seed_t, label = _extract_flux(num_struct, 'Explicit (const R_c)')
-            ax.plot(th, qh, '-', linewidth=1.6, color=(0.95, 0.65, 0.2), label=label)
-            if seed_t > 0:
-                ax.axvline(seed_t, color=(0.4, 0.4, 0.4), linestyle=':', linewidth=1.0,
-                           label='Seed time (explicit)')
-            _warn_if_flux_unbounded(num_struct, 'explicit flux')
-        else:
-            explicit = num_struct.get('explicit') if isinstance(num_struct, dict) else None
-            if isinstance(explicit, dict):
-                th, qh, seed_t, label = _extract_flux(explicit, 'Explicit (const R_c)')
-                ax.plot(th, qh, '-', linewidth=1.6, color=(0.95, 0.65, 0.2), label=label)
-                if seed_t > 0:
-                    ax.axvline(seed_t, color=(0.4, 0.4, 0.4), linestyle=':', linewidth=1.0,
-                               label='Seed time (explicit)')
-                _warn_if_flux_unbounded(explicit, 'explicit flux')
-            enthalpy = num_struct.get('enthalpy') if isinstance(num_struct, dict) else None
-            if isinstance(enthalpy, dict):
-                thH, qhH, seedH, labelH = _extract_flux(enthalpy, 'Enthalpy (const R_c)')
-                ax.plot(thH, qhH, '--', linewidth=1.5, color=(0.3, 0.75, 0.93), label=labelH)
-                if seedH > 0:
-                    ax.axvline(seedH, color=(0.1, 0.5, 0.7), linestyle=':', linewidth=1.0,
-                               label='Seed time (enthalpy)')
-                _warn_if_flux_unbounded(enthalpy, 'enthalpy flux')
+    explicit = _get_explicit_snapshot(num_struct)
+    if explicit:
+        th, qh, seed_t, label = _extract_flux(explicit, 'Explicit (const R_c)')
+        ax.plot(th, qh, '-', linewidth=1.6, color=(0.95, 0.65, 0.2), label=label)
+        if seed_t > 0:
+            ax.axvline(seed_t, color=(0.4, 0.4, 0.4), linestyle=':', linewidth=1.0,
+                       label='Seed time (explicit)')
+        _warn_if_flux_unbounded(explicit, 'explicit flux')
 
     ax.set_xlabel('time t [s]')
     ax.set_ylabel(r'interface heat flux q(0,t) [W m$^{-2}$]')
@@ -225,15 +189,20 @@ def plot_flux(case: Dict[str, object], R_c: float, t_max: float | None = None) -
 
 
 def _infer_tmax(case: Dict[str, object]) -> float | None:
-    num_struct = case.get('num')
-    if not isinstance(num_struct, dict):
+    explicit = _get_explicit_snapshot(case.get('num'))
+    if explicit and 't' in explicit:
+        return max(0.1, float(explicit['t']))
+    return None
+
+
+def _get_explicit_snapshot(num_struct: object) -> Dict[str, object] | None:
+    if not isinstance(num_struct, dict) or not num_struct:
         return None
-    if 't' in num_struct:
-        return max(0.1, float(num_struct['t']))
-    for key in ('explicit', 'enthalpy'):
-        snap = num_struct.get(key)
-        if isinstance(snap, dict) and 't' in snap:
-            return max(0.1, float(snap['t']))
+    explicit = num_struct.get('explicit')
+    if isinstance(explicit, dict):
+        return explicit
+    if all(key in num_struct for key in ('x', 'T')):
+        return num_struct  # legacy structure already stores explicit snapshot
     return None
 
 

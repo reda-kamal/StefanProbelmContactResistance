@@ -11,7 +11,9 @@ try:
         plot_diff_profile,
         plot_flux,
         plot_profiles,
+        plot_front_history,
         plot_variable_contact_flux,
+        plot_variable_contact_resistance,
     )
 except ImportError:  # pragma: no cover - support running directly via PyCharm/CLI
     if __package__ is None or __package__ == "":
@@ -24,7 +26,9 @@ except ImportError:  # pragma: no cover - support running directly via PyCharm/C
         plot_diff_profile,
         plot_flux,
         plot_profiles,
+        plot_front_history,
         plot_variable_contact_flux,
+        plot_variable_contact_resistance,
     )
 
 
@@ -100,7 +104,9 @@ def main(show_plots: bool = True) -> None:
         plot_diff_profile(case)
         plot_conductance(case, R_c, 0.1)
         plot_flux(case, R_c, 0.1)
+        plot_front_history(case)
         plot_variable_contact_flux(case, 0.1)
+        plot_variable_contact_resistance(case)
 
     if show_plots:
         try:

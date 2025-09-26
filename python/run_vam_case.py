@@ -131,6 +131,7 @@ def run_vam_case(label: str, k_w: float, rho_w: float, c_w: float,
     snap_explicit['meta'] = meta_explicit
 
     variable_snaps = None
+    variable_meta = None
     if variable_contact_cfg:
         final_opts = meta_explicit.get('options', explicit_opts)
 
@@ -148,13 +149,28 @@ def run_vam_case(label: str, k_w: float, rho_w: float, c_w: float,
         rc_spec_early = {'times': rc_time_hist, 'values': rc_early}
         rc_spec_late = {'times': rc_time_hist, 'values': rc_late}
 
-        snap_var_early = explicit_stefan_snapshot(
-            k_w, rho_w, c_w, M, rc_spec_early, t_phys, params_struct, final_opts,
+        var_opts = copy.deepcopy(final_opts)
+        if isinstance(var_opts.get('refine'), dict):
+            var_refine = copy.deepcopy(var_opts['refine'])  # type: ignore[index]
+        else:
+            var_refine = {}
+        var_refine['max_iters'] = 1
+        var_opts['refine'] = var_refine
+        if isinstance(var_opts.get('flux_smoothing'), (int, float)) and var_opts['flux_smoothing'] and var_opts['flux_smoothing'] > 1:  # type: ignore[index]
+            var_opts['flux_smoothing'] = 0
+
+        snap_var_early, meta_var_early = run_refined_snapshot(
+            explicit_stefan_snapshot, 'explicit-variable-early', var_opts,
+            k_w, rho_w, c_w, M, rc_spec_early, t_phys,
+            params_struct, x, Te, Tl,
         )
-        snap_var_late = explicit_stefan_snapshot(
-            k_w, rho_w, c_w, M, rc_spec_late, t_phys, params_struct, final_opts,
+        snap_var_late, meta_var_late = run_refined_snapshot(
+            explicit_stefan_snapshot, 'explicit-variable-late', var_opts,
+            k_w, rho_w, c_w, M, rc_spec_late, t_phys,
+            params_struct, x, Te, Tl,
         )
         variable_snaps = {'early': snap_var_early, 'late': snap_var_late}
+        variable_meta = {'early': meta_var_early, 'late': meta_var_late}
 
     out = CaseResult()
     out['label'] = label
@@ -167,7 +183,10 @@ def run_vam_case(label: str, k_w: float, rho_w: float, c_w: float,
     if variable_snaps:
         num_dict['variable'] = variable_snaps
     out['num'] = num_dict
-    out['diagnostics'] = {'explicit': meta_explicit}
+    diagnostics = {'explicit': meta_explicit}
+    if variable_snaps:
+        diagnostics['variable'] = variable_meta if variable_meta is not None else {}
+    out['diagnostics'] = diagnostics
     return out
 
 

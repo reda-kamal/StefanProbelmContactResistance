@@ -198,10 +198,15 @@ def explicit_stefan_snapshot(k_w: float, rho_w: float, c_w: float,
     rc_hist = [0.0] * n_hist_max
     Tw_face_hist = [0.0] * n_hist_max
     Ts_face_hist = [0.0] * n_hist_max
+    front_hist = [0.0] * n_hist_max
+    front_err_s = [0.0] * n_hist_max
+    front_err_l = [0.0] * n_hist_max
     ksave = 0
     last_save_time = -1e30
 
     m_seed = max(0, min(Nf - 1, int(math.floor(S_real / dxf))))
+    solid_end_seed = m_seed - 1
+    liquid_start_seed = m_seed
     solid_cells_seed = max(1, m_seed)
 
     rc_seed = rc_eval(t_phys)
@@ -210,12 +215,22 @@ def explicit_stefan_snapshot(k_w: float, rho_w: float, c_w: float,
     Ts_face_seed = Tfld[0] + Rs * q_seed
     Tw_face_seed_lin = _face_temperature(Tw, Tw_face_seed, 'wall')
     Ts_face_seed_lin = _face_temperature(Tfld, Ts_face_seed, 'solid', solid_cells_seed)
+    grad_s_seed, grad_l_seed = _stefan_gradients(
+        Tfld, dxf, Tf, S_real, solid_end_seed, liquid_start_seed,
+    )
+    Ts_int_seed, Tl_int_seed = _interface_temps_from_gradients(
+        Tfld, dxf, S_real, grad_s_seed, grad_l_seed,
+        solid_end_seed, liquid_start_seed,
+    )
     ksave += 1
     t_hist[ksave-1] = t_rel
     q_hist[ksave-1] = _contact_flux(Tw_face_seed_lin, Ts_face_seed_lin, q_seed, rc_seed)
     rc_hist[ksave-1] = rc_seed
     Tw_face_hist[ksave-1] = Tw_face_seed_lin
     Ts_face_hist[ksave-1] = Ts_face_seed_lin
+    front_hist[ksave-1] = S_real
+    front_err_s[ksave-1] = Ts_int_seed - Tf if Ts_int_seed == Ts_int_seed else float('nan')
+    front_err_l[ksave-1] = Tl_int_seed - Tf if Tl_int_seed == Tl_int_seed else float('nan')
     last_save_time = t_rel
 
     for step in range(1, nsteps + 1):
@@ -267,9 +282,14 @@ def explicit_stefan_snapshot(k_w: float, rho_w: float, c_w: float,
         Tfld = Tn
 
         grad_s, grad_l = _stefan_gradients(Tfld, dxf, Tf, S_real, solid_end, liquid_start)
+        Ts_int, Tl_int = _interface_temps_from_gradients(
+            Tfld, dxf, S_real, grad_s, grad_l, solid_end, liquid_start,
+        )
 
         S_real = S_real + dt_step * (k_s * grad_s - k_l * grad_l) / (rho_s * L)
         S_real = min((Nf - 1) * dxf, max(1e-9, S_real))
+
+        m_next = max(0, min(Nf - 1, int(math.floor(S_real / dxf))))
 
         t_elapsed += dt_step
         t_phys += dt_step
@@ -279,7 +299,6 @@ def explicit_stefan_snapshot(k_w: float, rho_w: float, c_w: float,
         q1 = (Tw[0] - Tfld[0]) / (Rw + rc_next + Rs)
         Tw_face_new = Tw[0] - Rw * q1
         Ts_face_new = Tfld[0] + Rs * q1
-        m_next = max(0, min(Nf - 1, int(math.floor(S_real / dxf))))
         solid_cells = max(1, m_next)
         Tw_face_lin = _face_temperature(Tw, Tw_face_new, 'wall')
         Ts_face_lin = _face_temperature(Tfld, Ts_face_new, 'solid', solid_cells)
@@ -299,6 +318,9 @@ def explicit_stefan_snapshot(k_w: float, rho_w: float, c_w: float,
             rc_hist[ksave-1] = rc_next
             Tw_face_hist[ksave-1] = Tw_face_lin
             Ts_face_hist[ksave-1] = Ts_face_lin
+            front_hist[ksave-1] = S_real
+            front_err_s[ksave-1] = Ts_int - Tf if Ts_int == Ts_int else float('nan')
+            front_err_l[ksave-1] = Tl_int - Tf if Tl_int == Tl_int else float('nan')
             last_save_time = t_rel
 
     snap = Snapshot()
@@ -324,6 +346,9 @@ def explicit_stefan_snapshot(k_w: float, rho_w: float, c_w: float,
     rc_hist = rc_hist[:ksave]
     Tw_face_hist = Tw_face_hist[:ksave]
     Ts_face_hist = Ts_face_hist[:ksave]
+    front_hist = front_hist[:ksave]
+    front_err_s = front_err_s[:ksave]
+    front_err_l = front_err_l[:ksave]
 
     t_phys_hist = [tv + seed_time for tv in t_hist]
 
@@ -337,6 +362,13 @@ def explicit_stefan_snapshot(k_w: float, rho_w: float, c_w: float,
         'Tw_face': Tw_face_hist,
         'Ts_face': Ts_face_hist,
         't_phys': t_phys_hist,
+    }
+    snap['front'] = {
+        't': t_hist,
+        't_phys': t_phys_hist,
+        'S': front_hist,
+        'solid_delta': front_err_s,
+        'liquid_delta': front_err_l,
     }
     if rc_meta is not None:
         snap['q_meta'] = rc_meta
@@ -378,6 +410,24 @@ def _contact_flux(Tw_face: float, Ts_face: float, q_halfcell: float, R_c: float)
     if abs(R_c) < 1e-12:
         return q_halfcell
     return (Tw_face - Ts_face) / R_c
+
+
+def _interface_temps_from_gradients(Tfld: List[float], dxf: float, S_real: float,
+                                    grad_s: float, grad_l: float,
+                                    solid_end: int, liquid_start: int
+                                    ) -> tuple[float, float]:
+    Ts_int = float('nan')
+    Tl_int = float('nan')
+
+    if solid_end >= 0 and solid_end < len(Tfld):
+        center = (solid_end + 0.5) * dxf
+        Ts_int = Tfld[solid_end] + grad_s * (S_real - center)
+
+    if liquid_start >= 0 and liquid_start < len(Tfld):
+        center = (liquid_start + 0.5) * dxf
+        Tl_int = Tfld[liquid_start] - grad_l * (center - S_real)
+
+    return Ts_int, Tl_int
 
 
 def _stefan_gradients(Tfld: List[float], dxf: float, Tf: float, S_real: float,

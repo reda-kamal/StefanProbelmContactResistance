@@ -11,9 +11,9 @@ except ImportError:  # pragma: no cover - optional dependency at runtime
     plt = None  # type: ignore[assignment]
 
 try:
-    from .vam_face_temps_and_q import vam_face_temps_and_q
+    from .vam_face_temps_and_q import vam_face_temps_and_q, vam_contact_resistance
 except ImportError:  # pragma: no cover - support running as a script
-    from vam_face_temps_and_q import vam_face_temps_and_q  # type: ignore
+    from vam_face_temps_and_q import vam_face_temps_and_q, vam_contact_resistance  # type: ignore
 
 
 def plot_profiles(case: Dict[str, object]) -> None:
@@ -202,6 +202,66 @@ def plot_flux(case: Dict[str, object], R_c: float, t_max: float | None = None) -
     ax.set_xlim(0.0, t_max)
 
 
+def plot_front_history(case: Dict[str, object]) -> None:
+    """Plot the freezing-front trajectory and interface temperature residuals."""
+
+    if not _ensure_matplotlib('front history'):
+        return
+
+    num_struct = case.get('num') if isinstance(case, dict) else None
+    explicit = None
+    if isinstance(num_struct, dict):
+        explicit = num_struct.get('explicit')
+    if not isinstance(explicit, dict):
+        warnings.warn('No explicit snapshot available for front history plot.', RuntimeWarning)
+        return
+
+    front = explicit.get('front') if isinstance(explicit, dict) else None
+    if not isinstance(front, dict):
+        warnings.warn('Front history not stored in explicit snapshot.', RuntimeWarning)
+        return
+
+    t_phys = front.get('t_phys') or front.get('t')
+    S_hist = front.get('S')
+    if not (isinstance(t_phys, list) and isinstance(S_hist, list) and t_phys):
+        warnings.warn('Insufficient front history data for plotting.', RuntimeWarning)
+        return
+
+    params: Dict[str, float] = case['params']  # type: ignore[assignment]
+    lam = params['lam']
+    alpha_s = params['alpha_s']
+    S0_e = params['S0_e']
+    t0_e = params['t0_e']
+    S0_l = params['S0_l']
+    t0_l = params['t0_l']
+
+    times = [float(tt) for tt in t_phys]
+    S_vals = [float(ss) for ss in S_hist]
+    Se = [2 * lam * math.sqrt(alpha_s * (tt + t0_e)) - S0_e for tt in times]
+    Sl = [2 * lam * math.sqrt(alpha_s * (tt + t0_l)) - S0_l for tt in times]
+
+    fig, ax = plt.subplots(num=f"Freezing front — {case['label']}")
+    ax.grid(True)
+    ax.plot(times, Se, 'k--', linewidth=1.4, label=r'VAM $S^{(0)}(t)$')
+    ax.plot(times, Sl, 'b-', linewidth=1.4, label=r'VAM $S^{(\infty)}(t)$')
+    ax.plot(times, S_vals, color=(0.95, 0.65, 0.2), linewidth=1.6,
+            label=r'Explicit $S_{num}(t)$')
+    ax.set_xlabel('time t [s]')
+    ax.set_ylabel('Front position S(t) [m]')
+    ax.legend(loc='upper left')
+
+    solid_delta = front.get('solid_delta')
+    liquid_delta = front.get('liquid_delta')
+    if isinstance(solid_delta, list) and isinstance(liquid_delta, list):
+        if any(_is_finite(val) for val in solid_delta + liquid_delta):
+            ax2 = ax.twinx()
+            ax2.set_ylabel('Interface ΔT [°C]')
+            ax2.plot(times, solid_delta, 'm:', linewidth=1.2, label=r'$T_s(S)-T_f$')
+            ax2.plot(times, liquid_delta, 'c-.', linewidth=1.2, label=r'$T_l(S)-T_f$')
+            ax2.axhline(0.0, color='0.5', linestyle=':', linewidth=1.0)
+            ax2.legend(loc='upper right')
+
+
 def plot_variable_contact_flux(case: Dict[str, object], t_max: float | None = None) -> None:
     """Compare VAM flux envelopes with numerical runs using variable R_c(t)."""
 
@@ -263,6 +323,72 @@ def plot_variable_contact_flux(case: Dict[str, object], t_max: float | None = No
     ax.legend(loc='lower right')
 
 
+def plot_variable_contact_resistance(case: Dict[str, object]) -> None:
+    """Plot VAM vs numerical contact resistance histories for variable runs."""
+
+    if not _ensure_matplotlib('variable-contact resistance'):
+        return
+
+    num_struct = case.get('num')
+    if not isinstance(num_struct, dict):
+        warnings.warn('No numerical data available for variable-contact resistance plot.', RuntimeWarning)
+        return
+
+    var_struct = num_struct.get('variable') if isinstance(num_struct, dict) else None
+    if not isinstance(var_struct, dict):
+        warnings.warn('Variable-contact snapshots not present in case data.', RuntimeWarning)
+        return
+
+    params: Dict[str, float] = case['params']  # type: ignore[assignment]
+
+    fig, ax = plt.subplots(num=f"Variable-contact resistance — {case['label']}")
+    ax.grid(True)
+
+    entries = [
+        ('early', 'VAM$^{(0)}$', 'Explicit (VAM $R_c^{(0)}$)', 'k'),
+        ('late', 'VAM$^{(\infty)}$', 'Explicit (VAM $R_c^{(\infty)}$)', 'b'),
+    ]
+
+    for which, label_vam, label_num, color in entries:
+        snap = var_struct.get(which)
+        if not isinstance(snap, dict):
+            continue
+        q_struct = snap.get('q') if isinstance(snap, dict) else None
+        if not isinstance(q_struct, dict):
+            continue
+        t_hist = q_struct.get('t_phys') or q_struct.get('t')
+        rc_hist = q_struct.get('R_c')
+        Tw_face = q_struct.get('Tw_face')
+        Ts_face = q_struct.get('Ts_face')
+        q_vals = q_struct.get('val')
+        if not (isinstance(t_hist, list) and isinstance(rc_hist, list) and isinstance(q_vals, list)):
+            continue
+        times = [float(tt) for tt in t_hist]
+        rc_vals = [float(rv) for rv in rc_hist]
+        if not times:
+            continue
+        rc_vam = vam_contact_resistance(params, which, times)
+        ax.plot(times, rc_vam, linestyle='--', linewidth=1.4, color=color, label=label_vam)
+        ax.plot(times, rc_vals, linestyle='-', linewidth=1.6, color=color, alpha=0.7, label=label_num)
+
+        if isinstance(Tw_face, list) and isinstance(Ts_face, list):
+            rc_back = []
+            for tw, ts, q in zip(Tw_face, Ts_face, q_vals):
+                qf = float(q)
+                if abs(qf) > 1e-9:
+                    rc_back.append((float(tw) - float(ts)) / qf)
+                else:
+                    rc_back.append(float('nan'))
+            if any(_is_finite(val) for val in rc_back):
+                ax.plot(times, rc_back, linestyle=':', linewidth=1.0, color=color,
+                        alpha=0.6, label=f'{label_num} (reconstructed)')
+
+    ax.set_xlabel('time t [s]')
+    ax.set_ylabel(r'contact resistance $R_c(t)$ [m$^2$ K W$^{-1}$]')
+    ax.set_title(f"Variable-contact resistance — {case['label']}")
+    ax.legend(loc='upper right')
+
+
 def _infer_tmax(case: Dict[str, object]) -> float | None:
     num_struct = case.get('num')
     if not isinstance(num_struct, dict):
@@ -298,6 +424,10 @@ def _extract_flux(snap: Dict[str, object], base_label: str) -> Tuple[List[float]
         label = f"{base_label} ({history['flux_window']}-pt mov. avg.)"
 
     return th, qh, seed_t, label
+
+
+def _is_finite(val: object) -> bool:
+    return isinstance(val, (int, float)) and math.isfinite(val)
 
 
 def _warn_if_unbounded(snap: Dict[str, object], label: str) -> None:

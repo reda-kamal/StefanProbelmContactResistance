@@ -18,11 +18,21 @@ function plot_profiles(caseX)
             plot(xn, Tn, '.', 'MarkerSize', 6, 'DisplayName','Explicit numeric');
             xline(Sn, 'm--','LineWidth',1.2, 'DisplayName','S^{num}');
             warn_if_unbounded(num_struct, 'numeric profile');
-        elseif isfield(num_struct,'explicit')
-            snap = num_struct.explicit;
-            plot(snap.x, snap.T, '.', 'MarkerSize', 6, 'DisplayName','Explicit numeric');
-            xline(snap.S, 'm--','LineWidth',1.2, 'DisplayName','S^{num}_{exp}');
-            warn_if_unbounded(snap, 'explicit profile');
+        else
+            if isfield(num_struct,'explicit')
+                snap = num_struct.explicit;
+                plot(snap.x, snap.T, '.', 'MarkerSize', 6, 'DisplayName','Explicit numeric');
+                xline(snap.S, 'm--','LineWidth',1.2, 'DisplayName','S^{num}_{exp}');
+                warn_if_unbounded(snap, 'explicit profile');
+            end
+            if isfield(num_struct,'enthalpy')
+                snapH = num_struct.enthalpy;
+                plot(snapH.x, snapH.T, 'o', 'MarkerSize', 4, 'LineStyle','none', ...
+                    'MarkerFaceColor','none', 'MarkerEdgeColor',[0.3 0.75 0.93], ...
+                    'DisplayName','Enthalpy numeric');
+                xline(snapH.S, 'c-.','LineWidth',1.2, 'DisplayName','S^{num}_{enth}');
+                warn_if_unbounded(snapH, 'enthalpy profile');
+            end
         end
     end
 

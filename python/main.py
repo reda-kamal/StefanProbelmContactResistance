@@ -32,23 +32,12 @@ def main(show_plots: bool = True) -> None:
 
     explicit_opts = {
         'CFL': 0.30,
-        'wall': {'length': 7.5e-3, 'cells': 220},
-        'fluid': {'length': 8.0e-3, 'cells': 320, 'min_cells': 220},
+        'wall': {'length': 5.0e-3, 'cells': 80},
+        'fluid': {'length': 6.0e-3, 'cells': 120, 'min_cells': 80},
         'min_seed_cells': 1,
-        'history_dt': 5.0e-4,
+        'history_dt': 1.0e-3,
         'flux_smoothing': 5,
-        'nsave': 4000,
-        'refine': {
-            'max_iters': 3,
-            'factor': 1.5,
-            'cfl_shrink': 0.75,
-            'tol_abs_T': 3.0,
-            'tol_rel_T': 0.01,
-            'tol_abs_q': 200.0,
-            'tol_rel_q': 0.01,
-            'history_shrink': 0.75,
-            'min_CFL': 0.05,
-        },
+        'nsave': 2000,
     }
     sim_opts = {
         'explicit': explicit_opts,
@@ -81,12 +70,13 @@ def main(show_plots: bool = True) -> None:
         print(f"=== {case['label']} ===")
         params = case['params']
         print(f"lambda = {params['lam']:.5f}, Ti = {params['Ti']:.3f} C")
-        snap = case['num']['explicit']
-        q_hist = snap['q']['val']
-        t_hist = snap['q']['t']
-        final_q = q_hist[-1] if q_hist else float('nan')
-        final_t = t_hist[-1] if t_hist else float('nan')
-        print(f"  explicit  : S = {snap['S']:.6f} m at t={final_t:.4f} s, q={final_q:.2f} W/m^2")
+        for method in ('explicit', 'enthalpy'):
+            snap = case['num'][method]
+            q_hist = snap['q']['val']
+            t_hist = snap['q']['t']
+            final_q = q_hist[-1] if q_hist else float('nan')
+            final_t = t_hist[-1] if t_hist else float('nan')
+            print(f"  {method:9s} : S = {snap['S']:.6f} m at t={final_t:.4f} s, q={final_q:.2f} W/m^2")
         print()
 
     for case in cases:

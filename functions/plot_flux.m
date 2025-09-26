@@ -7,6 +7,8 @@ function plot_flux(caseX, R_c, t_max)
                 t_max = max(0.1, num_struct.t);
             elseif isfield(num_struct,'explicit') && isfield(num_struct.explicit,'t')
                 t_max = max(0.1, num_struct.explicit.t);
+            elseif isfield(num_struct,'enthalpy') && isfield(num_struct.enthalpy,'t')
+                t_max = max(0.1, num_struct.enthalpy.t);
             else
                 t_max = 0.1;
             end
@@ -45,6 +47,16 @@ function plot_flux(caseX, R_c, t_max)
                         'DisplayName','Seed time (explicit)');
                 end
                 warn_if_flux_unbounded(snap_exp, 'explicit flux');
+            end
+            if isfield(num_struct,'enthalpy')
+                snap_ent = num_struct.enthalpy;
+                [thH, qhH, seedH, labelH] = extract_flux(snap_ent, 'Enthalpy (const R_c)');
+                plot(thH, qhH, '--', 'LineWidth',1.5, 'Color',[0.3 0.75 0.93], 'DisplayName', labelH);
+                if seedH > 0
+                    xline(seedH, 'Color',[0.1 0.5 0.7], 'LineStyle',':', 'LineWidth',1.0, ...
+                        'DisplayName','Seed time (enthalpy)');
+                end
+                warn_if_flux_unbounded(snap_ent, 'enthalpy flux');
             end
         end
     end

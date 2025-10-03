@@ -341,25 +341,35 @@ for n = 1:nsteps
     Tfld = Tn;
 
     % ===== Stefan update (one-sided slopes) =====
-    if m >= 2
-        As_ = Tfld(m)   - Tf;  Bs_ = Tfld(m-1) - Tf;
-        grad_s = (Bs_ - 9*As_) / (3*dxf);
-    elseif m >= 1
-        grad_s = coeff.two_over_dx * (Tf - Tfld(m));
-    else
-        grad_s = 0;
+    try
+        ds = update_interface_from_T_gradient(Tfld, xf, m, k_s, k_l, rho_s, L, dt_step);
+    catch err
+        if ~strcmp(err.identifier, 'update_interface_from_T_gradient:IndexError')
+            rethrow(err);
+        end
+
+        if m >= 2
+            As_ = Tfld(m)   - Tf;  Bs_ = Tfld(m-1) - Tf;
+            grad_s = (Bs_ - 9*As_) / (3*dxf);
+        elseif m >= 1
+            grad_s = coeff.two_over_dx * (Tf - Tfld(m));
+        else
+            grad_s = 0;
+        end
+
+        if m+2 <= Nf
+            Al_ = Tfld(m+1) - Tf;  Bl_ = Tfld(m+2) - Tf;
+            grad_l = coeff.grad_upwind * (9*Al_ - Bl_);
+        elseif m+1 <= Nf
+            grad_l = coeff.two_over_dx * (Tfld(m+1) - Tf);
+        else
+            grad_l = 0;
+        end
+
+        ds = dt_step * ( k_s*grad_s - k_l*grad_l ) / (rho_s*L );
     end
 
-    if m+2 <= Nf
-        Al_ = Tfld(m+1) - Tf;  Bl_ = Tfld(m+2) - Tf;
-        grad_l = coeff.grad_upwind * (9*Al_ - Bl_);
-    elseif m+1 <= Nf
-        grad_l = coeff.two_over_dx * (Tfld(m+1) - Tf);
-    else
-        grad_l = 0;
-    end
-
-    S_real = S_real + dt_step * ( k_s*grad_s - k_l*grad_l ) / (rho_s*L);
+    S_real = S_real + ds;
     S_real = min( (Nf-1)*dxf, max( dxf, S_real ) );
 
     % Advance clocks after the state has been updated
@@ -422,6 +432,24 @@ snap.q.t_phys = t_hist + seed_time;
 if flux_window > 1
     snap.q.val = moving_average(snap.q.val, flux_window);
 end
+end
+
+function ds = update_interface_from_T_gradient(T, y, i_s, k_s, k_l, rho_s, L_latent, dt)
+%UPDATE_INTERFACE_FROM_T_GRADIENT Advance interface via one-sided gradients.
+    i_l = i_s + 1;
+    if (i_s - 1) < 1 || (i_l + 1) > numel(T)
+        error('update_interface_from_T_gradient:IndexError', ...
+              'Interface too close to boundary for one-sided gradients.');
+    end
+
+    dy_s = y(i_s)   - y(i_s - 1);
+    dy_l = y(i_l+1) - y(i_l);
+
+    dTdy_s = (T(i_s)   - T(i_s - 1)) / dy_s;
+    dTdy_l = (T(i_l+1) - T(i_l))     / dy_l;
+
+    ds_dt = (k_s * dTdy_s - k_l * dTdy_l) / (rho_s * L_latent);
+    ds = dt * ds_dt;
 end
 
 function coeff = local_coeffs(dt, aw, as, al, dxw, dxf)

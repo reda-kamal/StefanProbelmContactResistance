@@ -15,6 +15,25 @@ class Snapshot(dict):
     """Simple dictionary-based container."""
 
 
+def update_interface_from_T_gradient(T: List[float], y: List[float], i_s: int,
+                                     k_s: float, k_l: float,
+                                     rho_s: float, L_latent: float,
+                                     dt: float) -> float:
+    """Advance the interface using one-sided temperature gradients."""
+    i_l = i_s + 1
+    if i_s - 1 < 0 or i_l + 1 >= len(T):
+        raise IndexError("Interface too close to boundary for one-sided gradients.")
+
+    dy_s = y[i_s] - y[i_s - 1]
+    dy_l = y[i_l + 1] - y[i_l]
+
+    dTdy_s = (T[i_s] - T[i_s - 1]) / dy_s
+    dTdy_l = (T[i_l + 1] - T[i_l]) / dy_l
+
+    ds_dt = (k_s * dTdy_s - k_l * dTdy_l) / (rho_s * L_latent)
+    return dt * ds_dt
+
+
 def explicit_stefan_snapshot(k_w: float, rho_w: float, c_w: float,
                              M: Dict[str, float], R_c: float,
                              t_end: float, params: Dict[str, float],
@@ -255,25 +274,39 @@ def explicit_stefan_snapshot(k_w: float, rho_w: float, c_w: float,
         Tn[-1] = Tl_inf
         Tfld = Tn
 
-        if solid_end >= 1:
-            As_ = Tfld[solid_end] - Tf
-            Bs_ = Tfld[solid_end - 1] - Tf
-            grad_s = (Bs_ - 9 * As_) / (3 * dxf)
-        elif solid_end >= 0:
-            grad_s = coeff['two_over_dx'] * (Tf - Tfld[solid_end])
-        else:
-            grad_s = 0.0
+        try:
+            ds = update_interface_from_T_gradient(
+                T=Tfld,
+                y=xf,
+                i_s=solid_end,
+                k_s=k_s,
+                k_l=k_l,
+                rho_s=rho_s,
+                L_latent=L,
+                dt=dt_step,
+            )
+        except IndexError:
+            if solid_end >= 1:
+                As_ = Tfld[solid_end] - Tf
+                Bs_ = Tfld[solid_end - 1] - Tf
+                grad_s = (Bs_ - 9 * As_) / (3 * dxf)
+            elif solid_end >= 0:
+                grad_s = coeff['two_over_dx'] * (Tf - Tfld[solid_end])
+            else:
+                grad_s = 0.0
 
-        if liquid_start + 1 < Nf:
-            Al_ = Tfld[liquid_start] - Tf
-            Bl_ = Tfld[liquid_start + 1] - Tf
-            grad_l = coeff['grad_upwind'] * (9 * Al_ - Bl_)
-        elif liquid_start < Nf:
-            grad_l = coeff['two_over_dx'] * (Tfld[liquid_start] - Tf)
-        else:
-            grad_l = 0.0
+            if liquid_start + 1 < Nf:
+                Al_ = Tfld[liquid_start] - Tf
+                Bl_ = Tfld[liquid_start + 1] - Tf
+                grad_l = coeff['grad_upwind'] * (9 * Al_ - Bl_)
+            elif liquid_start < Nf:
+                grad_l = coeff['two_over_dx'] * (Tfld[liquid_start] - Tf)
+            else:
+                grad_l = 0.0
 
-        S_real = S_real + dt_step * (k_s * grad_s - k_l * grad_l) / (rho_s * L)
+            ds = dt_step * (k_s * grad_s - k_l * grad_l) / (rho_s * L)
+
+        S_real = S_real + ds
         S_real = min((Nf - 1) * dxf, max(dxf, S_real))
 
         t_elapsed += dt_step

@@ -1,15 +1,35 @@
 function plot_diff_profile(caseX)
-%PLOT_DIFF_PROFILE Plot the difference between late- and early-time VAM profiles.
-    x = caseX.x; Tdiff = caseX.Tdiff;
-    Se = caseX.params.Se; Sl = caseX.params.Sl;
+%PLOT_DIFF_PROFILE Plot explicit temperature relative to fusion temperature.
 
-    figure('Name',['Profile difference @ t_{phys} — ', caseX.label]); hold on; box on; grid on;
-    plot(x, Tdiff, 'm-','LineWidth',1.7);
-    yline(0,'k:'); xline(0,'k:','LineWidth',1.0);
-    xline(Se,'k--','LineWidth',1.0); xline(Sl,'b--','LineWidth',1.0);
+    if ~isfield(caseX, 'num') || ~isstruct(caseX.num)
+        warning('plot_diff_profile:NoSnapshot', 'Case %s has no numerical snapshot.', caseX.label);
+        return;
+    end
+
+    snap = caseX.num;
+    if ~isfield(snap, 'x') || ~isfield(snap, 'T')
+        warning('plot_diff_profile:MissingProfile', 'Snapshot lacks x/T arrays for case %s.', caseX.label);
+        return;
+    end
+
+    params = caseX.params;
+    if isfield(params,'Tf'), Tf = params.Tf; else, Tf = 0; end
+
+    x = snap.x(:);
+    T = snap.T(:);
+    diff = T - Tf;
+
+    figure('Name',['Explicit profile − T_f @ t_{phys} — ', caseX.label]); hold on; box on; grid on;
+    plot(x, diff, 'm-', 'LineWidth', 1.8, 'DisplayName', 'Explicit (T − T_f)');
+    yline(0, 'k:', 'LineWidth', 1.0);
+    xline(0, 'k:', 'LineWidth', 1.0);
+    if isfield(snap, 'S')
+        xline(snap.S, 'm--', 'LineWidth', 1.2, 'DisplayName', 'Interface S(t)');
+    end
+
     xlabel('Physical coordinate  x  [m]');
-    ylabel('\Delta T(x) = T^{(\infty)} - T^{(0)}  [^{\circ}C]');
-    title(['Difference of VAM profiles @ t = t_{phys} — ', caseX.label]);
-    legend({'\Delta T(x)','0','Wall–solid','S^{(0)}','S^{(\infty)}'}, 'Location','SouthEast');
+    ylabel('Temperature offset  [^{\circ}C]');
+    title(['Explicit deviation from T_f — ', caseX.label]);
+    legend('Location','Best');
     xlim([min(x), max(x)]);
 end

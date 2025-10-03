@@ -1,7 +1,7 @@
 % Author: reda-kamal
 %% Three-domain Stefan problem with finite contact resistance
-%  VAM calibrations (early, late) vs explicit constant-Rc solver
-%  Plots per case: profiles, profile difference, heff(t), interface flux q(t)
+%  Explicit finite-difference solver for a contact-resistance Stefan problem.
+%  Plots per case: profiles, profile deviation from T_f, h_eff(t), interface flux q(t)
 
 % Ensure helper functions in ./functions are on the path
 func_dir = fullfile(fileparts(mfilename('fullpath')), 'functions');
@@ -33,20 +33,8 @@ explicit_opts = struct( ...
     'min_seed_cells', 1, ...       % initial solid thickness in cell units
     'history_dt',     2.5e-4, ...  % seconds between saved flux samples (approx.)
     'flux_smoothing', 5, ...       % odd moving-average window for q(t)
-    'nsave',          4000, ...    % fallback when history_dt <= 0
-    'refine',         struct( ...  % automatic refinement to satisfy VAM sandwich
-                           'max_iters', 3, ...
-                           'factor',    1.5, ...
-                           'cfl_shrink',0.75, ...
-                           'tol_abs_T', 0.15, ...
-                           'tol_rel_T', 0.01, ...
-                           'tol_abs_q', 200, ...
-                           'tol_rel_q', 0.01 ...
-                           ) ...
+    'nsave',          4000 ...     % fallback when history_dt <= 0
     );
-
-% Profile plotting mesh density (points per segment between breakpoints)
-profile_pts_per_seg = 400;
 
 %% --- WALL (sapphire-like, shared) --------------------------------------
 k_w   = 40;     rho_w = 3980;  c_w = 750;   % sapphire-ish
@@ -64,8 +52,7 @@ B.L   = 59.2e3;                                   % J/kg
 B.Tf  = 231.93;   B.Tw_inf = 50;  B.Tl_inf = B.Tf - 5;
 
 %% --- RUN BOTH CASES ----------------------------------------------------
-sim_opts = struct('explicit', explicit_opts, ...
-                  'profile_pts_per_seg', profile_pts_per_seg);
+sim_opts = struct('explicit', explicit_opts);
 
 caseA = run_vam_case('Water/Ice + Sapphire', k_w,rho_w,c_w, A, R_c, t_phys, sim_opts);
 caseB = run_vam_case('Tin (liq/sol) + Sapphire', k_w,rho_w,c_w, B, R_c, t_phys, sim_opts);

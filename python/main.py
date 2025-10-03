@@ -41,7 +41,6 @@ def main(show_plots: bool = True) -> None:
     }
     sim_opts = {
         'explicit': explicit_opts,
-        'profile_pts_per_seg': 400,
     }
 
     k_w = 40.0
@@ -69,16 +68,26 @@ def main(show_plots: bool = True) -> None:
     for case in cases:
         print(f"=== {case['label']} ===")
         params = case['params']
-        print(f"lambda = {params['lam']:.5f}, Ti = {params['Ti']:.3f} C")
         snap = case['num']
         q_hist = snap['q']['val']
         t_hist = snap['q']['t']
         final_q = q_hist[-1] if q_hist else float('nan')
         final_t = t_hist[-1] if t_hist else float('nan')
+        S_final = snap.get('S', float('nan'))
         print(
             "  explicit  : S = "
-            f"{snap['S']:.6f} m at t={final_t:.4f} s, q={final_q:.2f} W/m^2"
+            f"{S_final:.6f} m at t={final_t:.4f} s, q={final_q:.2f} W/m^2"
         )
+        if 'grid' in snap:
+            grid = snap['grid']
+            print(
+                "    grid     : Nw={Nw:d}, Nf={Nf:d}, dx_w={dxw:.4e} m, dx_f={dxf:.4e} m".format(
+                    Nw=int(grid.get('N_wall', 0)),
+                    Nf=int(grid.get('N_fluid', 0)),
+                    dxw=float(grid.get('dx_wall', float('nan'))),
+                    dxf=float(grid.get('dx_fluid', float('nan'))),
+                )
+            )
         print()
 
     for case in cases:

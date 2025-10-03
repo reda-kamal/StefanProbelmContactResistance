@@ -36,10 +36,12 @@ def update_interface_from_T_gradient(T: List[float], y: List[float], i_s: int,
 
 def explicit_stefan_snapshot(k_w: float, rho_w: float, c_w: float,
                              M: Dict[str, float], R_c: float,
-                             t_end: float, params: Dict[str, float],
+                             t_end: float, params: Dict[str, float] | None,
                              opts: Dict[str, object] | None = None) -> Snapshot:
     if opts is None:
         opts = {}
+    if params is None:
+        params = {}
 
     k_s = M['k_s']; rho_s = M['rho_s']; c_s = M['c_s']
     k_l = M['k_l']; rho_l = M['rho_l']; c_l = M['c_l']
@@ -49,8 +51,13 @@ def explicit_stefan_snapshot(k_w: float, rho_w: float, c_w: float,
     as_ = k_s/(rho_s*c_s)
     al = k_l/(rho_l*c_l)
 
-    lam = params['lam']; Ti = params['Ti']; S0_e = params['S0_e']
-    E0_e = params['E0_e']; t0_e = params['t0_e']; mu = params['mu']
+    lam = params.get('lam')
+    Ti = params.get('Ti', Tf)
+    S0_e = params.get('S0_e')
+    E0_e = params.get('E0_e')
+    t0_e = params.get('t0_e')
+    mu = params.get('mu')
+    use_vam_seed = all(value is not None for value in (lam, S0_e, E0_e, t0_e, mu))
 
     nodes_per_diff = get_opt(opts, 'nodes_per_diff', None)
     min_cells_legacy = get_opt(opts, 'min_cells', 400)
@@ -127,62 +134,89 @@ def explicit_stefan_snapshot(k_w: float, rho_w: float, c_w: float,
 
     seed_time = 0.0
     t_final_phys = t_end
-    for _ in range(5):
+    if use_vam_seed:
+        for _ in range(5):
+            Lw, Lf = compute_lengths(t_final_phys)
+            dxw = Lw / Nw
+            dxf = Lf / Nf
+            seed_thickness = min_seed_cells * dxf
+            seed_time_new = ((seed_thickness + S0_e)**2) / (4 * lam * lam * as_) - t0_e  # type: ignore[arg-type]
+            seed_time_new = max(0.0, seed_time_new)
+            t_final_phys = max(t_end, seed_time_new)
+            if abs(seed_time_new - seed_time) < 1e-12:
+                seed_time = seed_time_new
+                break
+            seed_time = seed_time_new
+
+        seed_time = max(0.0, seed_time)
+        t_final_phys = max(t_end, seed_time)
         Lw, Lf = compute_lengths(t_final_phys)
         dxw = Lw / Nw
         dxf = Lf / Nf
+
+        xw = [-(i + 0.5) * dxw for i in range(Nw)]
+        xf = [(i + 0.5) * dxf for i in range(Nf)]
+
         seed_thickness = min_seed_cells * dxf
-        seed_time_new = ((seed_thickness + S0_e)**2) / (4 * lam * lam * as_) - t0_e
-        seed_time_new = max(0.0, seed_time_new)
-        t_final_phys = max(t_end, seed_time_new)
-        if abs(seed_time_new - seed_time) < 1e-12:
-            seed_time = seed_time_new
-            break
-        seed_time = seed_time_new
+        seed_time = ((seed_thickness + S0_e)**2) / (4 * lam * lam * as_) - t0_e  # type: ignore[arg-type]
+        seed_time = max(0.0, seed_time)
+        t_final_phys = max(t_end, seed_time)
 
-    seed_time = max(0.0, seed_time)
-    t_final_phys = max(t_end, seed_time)
-    Lw, Lf = compute_lengths(t_final_phys)
-    dxw = Lw / Nw
-    dxf = Lf / Nf
+        tpe_seed = seed_time + t0_e  # type: ignore[operator]
+        den_w_e = 2 * math.sqrt(aw * tpe_seed)
+        den_s_e = 2 * math.sqrt(as_ * tpe_seed)
+        den_l_e = 2 * math.sqrt(al * tpe_seed)
+        erf_lam = math.erf(lam)  # type: ignore[arg-type]
+        if abs(erf_lam) < 1e-12:
+            erf_lam = math.copysign(1e-12, erf_lam if erf_lam != 0 else 1.0)
+        erf_mu = math.erf(mu)  # type: ignore[arg-type]
+        if abs(erf_mu - 1.0) < 1e-12:
+            erf_mu = 1.0 - math.copysign(1e-12, 1.0)
 
-    xw = [-(i + 0.5) * dxw for i in range(Nw)]
-    xf = [(i + 0.5) * dxf for i in range(Nf)]
+        Se_seed = 2 * lam * math.sqrt(as_ * tpe_seed) - S0_e  # type: ignore[arg-type]
 
-    seed_thickness = min_seed_cells * dxf
-    seed_time = ((seed_thickness + S0_e)**2) / (4 * lam * lam * as_) - t0_e
-    seed_time = max(0.0, seed_time)
-    t_final_phys = max(t_end, seed_time)
+        Tw = [Ti + (Ti - Tw_inf) * math.erf((x - E0_e) / den_w_e) for x in xw]  # type: ignore[arg-type]
+        Tfld: List[float] = []
+        for x in xf:
+            if x <= Se_seed:
+                Tfld.append(Ti + (Tf - Ti) * math.erf((x + S0_e) / den_s_e) / erf_lam)  # type: ignore[arg-type]
+            else:
+                Tfld.append(
+                    Tl_inf
+                    + (Tf - Tl_inf)
+                    * (math.erf((x + S0_e) / den_l_e) - 1.0)
+                    / (erf_mu - 1.0)
+                )
 
-    tpe_seed = seed_time + t0_e
-    den_w_e = 2 * math.sqrt(aw * tpe_seed)
-    den_s_e = 2 * math.sqrt(as_ * tpe_seed)
-    den_l_e = 2 * math.sqrt(al * tpe_seed)
-    erf_lam = math.erf(lam)
-    if abs(erf_lam) < 1e-12:
-        erf_lam = math.copysign(1e-12, erf_lam if erf_lam != 0 else 1.0)
-    erf_mu = math.erf(mu)
-    if abs(erf_mu - 1.0) < 1e-12:
-        erf_mu = 1.0 - math.copysign(1e-12, 1.0)
+        S_real = max(dxf, min((Nf - 1) * dxf, Se_seed))
 
-    Se_seed = 2 * lam * math.sqrt(as_ * tpe_seed) - S0_e
+        seed_info = {
+            'Se_vam': Se_seed,
+            'time': seed_time,
+            'thickness': S_real,
+            'cell_width': dxf,
+        }
+    else:
+        Lw, Lf = compute_lengths(t_final_phys)
+        dxw = Lw / Nw if Nw else 0.0
+        dxf = Lf / Nf if Nf else 0.0
 
-    Tw = [Ti + (Ti - Tw_inf) * math.erf((x - E0_e) / den_w_e) for x in xw]
-    Tfld: List[float] = []
-    for x in xf:
-        if x <= Se_seed:
-            Tfld.append(Ti + (Tf - Ti) * math.erf((x + S0_e) / den_s_e) / erf_lam)
-        else:
-            Tfld.append(Tl_inf + (Tf - Tl_inf) * (math.erf((x + S0_e) / den_l_e) - 1.0) / (erf_mu - 1.0))
+        xw = [-(i + 0.5) * dxw for i in range(Nw)]
+        xf = [(i + 0.5) * dxf for i in range(Nf)]
 
-    S_real = max(dxf, min((Nf - 1) * dxf, Se_seed))
+        seed_thickness = min_seed_cells * dxf
+        S_seed = max(dxf, min((Nf - 1) * dxf, seed_thickness if dxf else 0.0))
 
-    seed_info = {
-        'Se_vam': Se_seed,
-        'time': seed_time,
-        'thickness': S_real,
-        'cell_width': dxf,
-    }
+        Tw = [Tw_inf for _ in xw]
+        Tfld = [Tf if x <= S_seed else Tl_inf for x in xf]
+        S_real = S_seed
+
+        seed_info = {
+            'Se_vam': None,
+            'time': seed_time,
+            'thickness': S_real,
+            'cell_width': dxf,
+        }
 
     t_phys = seed_time
     t_rel = 0.0

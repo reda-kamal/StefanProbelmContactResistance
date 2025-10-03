@@ -1,67 +1,35 @@
 function plot_profiles(caseX)
-%PLOT_PROFILES Plot early/late VAM and explicit temperature profiles.
-    x = caseX.x; Te = caseX.Te; Tl = caseX.Tl;
-    Se = caseX.params.Se; Sl = caseX.params.Sl;
-    Tw = caseX.params.Tw_inf; Tf = caseX.params.Tf; Tl_inf = caseX.params.Tl_inf;
+%PLOT_PROFILES Plot the explicit temperature profile for a case.
 
-    figure('Name',['Profiles @ t_{phys} — ', caseX.label]); hold on; box on; grid on;
-    plot(x, Te, 'k--','LineWidth',1.6, 'DisplayName','VAM (0-time)');
-    plot(x, Tl, 'b-' ,'LineWidth',1.7, 'DisplayName','VAM (\infty-time)');
-    xline(0,  'k:' ,'LineWidth',1.0, 'DisplayName','Wall–solid');
-    xline(Se, 'k--','LineWidth',1.0, 'DisplayName','S^{(0)}');
-    xline(Sl, 'b--','LineWidth',1.0, 'DisplayName','S^{(\infty)}');
+    if ~isfield(caseX, 'num') || ~isstruct(caseX.num)
+        warning('plot_profiles:NoSnapshot', 'Case %s has no numerical snapshot.', caseX.label);
+        return;
+    end
 
-    if isfield(caseX,'num') && ~isempty(caseX.num)
-        num_struct = caseX.num;
-        if isfield(num_struct, 'x') && isfield(num_struct, 'T')
-            xn = num_struct.x;  Tn = num_struct.T;  Sn = num_struct.S;
-            plot(xn, Tn, '.', 'MarkerSize', 6, 'DisplayName','Explicit numeric');
-            xline(Sn, 'm--','LineWidth',1.2, 'DisplayName','S^{num}');
-            warn_if_unbounded(num_struct, 'numeric profile');
-        else
-            if isfield(num_struct,'explicit')
-                snap = num_struct.explicit;
-                plot(snap.x, snap.T, '.', 'MarkerSize', 6, 'DisplayName','Explicit numeric');
-                xline(snap.S, 'm--','LineWidth',1.2, 'DisplayName','S^{num}_{exp}');
-                warn_if_unbounded(snap, 'explicit profile');
-            end
-            if isfield(num_struct,'enthalpy')
-                snapH = num_struct.enthalpy;
-                plot(snapH.x, snapH.T, 'o', 'MarkerSize', 4, 'LineStyle','none', ...
-                    'MarkerFaceColor','none', 'MarkerEdgeColor',[0.3 0.75 0.93], ...
-                    'DisplayName','Enthalpy numeric');
-                xline(snapH.S, 'c-.','LineWidth',1.2, 'DisplayName','S^{num}_{enth}');
-                warn_if_unbounded(snapH, 'enthalpy profile');
-            end
-        end
+    snap = caseX.num;
+    if ~isfield(snap, 'x') || ~isfield(snap, 'T')
+        warning('plot_profiles:MissingProfile', 'Snapshot lacks x/T arrays for case %s.', caseX.label);
+        return;
+    end
+
+    x = snap.x(:);
+    T = snap.T(:);
+    params = caseX.params;
+    if isfield(params,'Tf'), Tf = params.Tf; else, Tf = 0; end
+    if isfield(params,'Tw_inf'), Tw = params.Tw_inf; else, Tw = min(T); end
+    if isfield(params,'Tl_inf'), Tl_inf = params.Tl_inf; else, Tl_inf = max(T); end
+
+    figure('Name',['Explicit profile @ t_{phys} — ', caseX.label]); hold on; box on; grid on;
+    plot(x, T, '-', 'LineWidth', 1.8, 'Color', [0.2 0.4 0.8], 'DisplayName', 'Explicit numeric');
+    xline(0, 'k:', 'LineWidth', 1.0, 'DisplayName', 'Wall/solid boundary');
+    if isfield(snap, 'S')
+        xline(snap.S, 'm--', 'LineWidth', 1.2, 'DisplayName', 'Interface S(t)');
     end
 
     xlabel('Physical coordinate  x  [m]');
     ylabel('Temperature  [^{\circ}C]');
-    title(['Two VAM vs explicit @ t = t_{phys} — ', caseX.label]);
-    legend('Location','SouthEast');
-    ylim([min([Tw Tf Tl_inf])-5, max([Tw Tf Tl_inf])+5]);
+    title(['Explicit profile @ t = t_{phys} — ', caseX.label]);
+    legend('Location','Best');
     xlim([min(x), max(x)]);
-end
-
-function warn_if_unbounded(snap, label)
-    if ~isstruct(snap)
-        return;
-    end
-    if isfield(snap, 'meta') && isstruct(snap.meta) && isfield(snap.meta, 'bounds')
-        b = snap.meta.bounds;
-        if isstruct(b) && isfield(b,'ok') && ~b.ok
-            profile_violation = NaN;
-            if isfield(b,'profile') && isstruct(b.profile) && isfield(b.profile,'max_violation')
-                profile_violation = b.profile.max_violation;
-            end
-            flux_violation = NaN;
-            if isfield(b,'flux') && isstruct(b.flux) && isfield(b.flux,'max_violation')
-                flux_violation = b.flux.max_violation;
-            end
-            warning('plot_profiles:NotBounded', ...
-                'Numerical %s exceeds VAM envelope (ΔT=%g°C, Δq=%g W/m^2).', ...
-                label, profile_violation, flux_violation);
-        end
-    end
+    ylim([min([Tw Tf Tl_inf]) - 5, max([Tw Tf Tl_inf]) + 5]);
 end

@@ -22,7 +22,8 @@ python python/main.py
 ```
 
 Both entry points execute the water/ice and tin/sapphire scenarios, emit a short
-text summary, and open four matplotlib figures per case (temperature profiles,
-profile difference, effective conductance, and interface heat flux).  The
-dictionaries returned by `run_vam_case` still contain all intermediate fields if
-deeper analysis is required.
+text summary, and open four matplotlib figures per case (explicit temperature
+profiles, deviation from the fusion temperature, effective conductance inferred
+from the flux history, and interface heat flux).  The dictionaries returned by
+`run_vam_case` contain the explicit snapshot and basic material properties for
+further analysis.

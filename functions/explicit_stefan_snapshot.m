@@ -18,9 +18,8 @@ function snap = explicit_stefan_snapshot(k_w,rho_w,c_w, M, R_c, t_end, params, o
 %   history_dt       - desired spacing of saved flux samples [s] (optional)
 %   flux_smoothing   - odd window length for moving-average smoothing
 
-    if nargin < 7
-        error('explicit_stefan_snapshot:MissingParams', ...
-              'Pass the calibrated VAM parameters to seed the solver.');
+    if nargin < 7 || isempty(params)
+        params = struct();
     end
 
     if nargin < 8 || isempty(opts)
@@ -37,16 +36,29 @@ aw = k_w/(rho_w*c_w);
 as = k_s/(rho_s*c_s);
 al = k_l/(rho_l*c_l);
 
-% Extract VAM calibration pieces needed for seeding
-lam  = params.lam;
-Ti   = params.Ti;
-S0_e = params.S0_e;
-E0_e = params.E0_e;
-t0_e = params.t0_e;
-Tf   = params.Tf;
-Tw_inf = params.Tw_inf;
-Tl_inf = params.Tl_inf;
-mu     = params.mu;
+% Extract optional VAM calibration pieces needed for seeding
+has_lam = isfield(params,'lam');
+has_S0e = isfield(params,'S0_e');
+has_E0e = isfield(params,'E0_e');
+has_t0e = isfield(params,'t0_e');
+has_mu  = isfield(params,'mu');
+use_vam_seed = has_lam && has_S0e && has_E0e && has_t0e && has_mu;
+
+if use_vam_seed
+    lam  = params.lam;
+    Ti   = params.Ti;
+    S0_e = params.S0_e;
+    E0_e = params.E0_e;
+    t0_e = params.t0_e;
+    mu   = params.mu;
+else
+    Ti = Tf;
+    lam = NaN; S0_e = NaN; E0_e = NaN; t0_e = 0; mu = NaN; %#ok<NASGU>
+end
+
+if isfield(params,'Tf'), Tf = params.Tf; end
+if isfield(params,'Tw_inf'), Tw_inf = params.Tw_inf; end
+if isfield(params,'Tl_inf'), Tl_inf = params.Tl_inf; end
 
 % Determine a seed time so the explicit grid starts with one full solid cell.
 % This avoids the "no-solid" start of the analytic solution while keeping the
@@ -134,80 +146,103 @@ fluid_cells = max(fluid_cells, fluid_min_cells);
 Nw = wall_cells;
 Nf = fluid_cells;
 
-% Fixed-point iteration to align the seed time (one full solid cell) and the
-% truncation lengths used for the semi-infinite domains.
+% Seed the numerical fields either from VAM calibration or a uniform slab.
 seed_time = 0;
 t_final_phys = t_end;
-for iter = 1:5
+if use_vam_seed
+    for iter = 1:5
+        if wall_length_fixed
+            Lw = wall_length;
+        else
+            Lw = max(wall_length, wall_extent_factor*sqrt(aw*t_final_phys));
+        end
+        if fluid_length_fixed
+            Lf = fluid_length;
+        else
+            Lf = max(fluid_length, fluid_extent_factor*sqrt(max(as,al)*t_final_phys));
+        end
+        dxw = Lw/Nw;   xw = -((1:Nw)' - 0.5)*dxw;  % 0^- at +dxw/2
+        dxf = Lf/Nf;   xf =  ((1:Nf)' - 0.5)*dxf;  % 0^+ at +dxf/2
+
+        seed_thickness = min_seed_cells * dxf;
+        seed_time_new = ((seed_thickness + S0_e)^2) / (4*lam^2*as) - t0_e;
+        seed_time_new = max(0, seed_time_new);
+        t_final_phys = max(t_end, seed_time_new);
+
+        if abs(seed_time_new - seed_time) < 1e-12
+            seed_time = seed_time_new;
+            break;
+        end
+
+        seed_time = seed_time_new;
+    end
+
+    seed_time = max(seed_time, 0);
+    t_final_phys = max(t_end, seed_time);
+    if ~wall_length_fixed
+        wall_length = max(wall_length, wall_extent_factor*sqrt(aw*t_final_phys));
+    end
+    if ~fluid_length_fixed
+        fluid_length = max(fluid_length, fluid_extent_factor*sqrt(max(as,al)*t_final_phys));
+    end
+    Lw = wall_length;
+    Lf = fluid_length;
+    dxw = Lw/Nw;   xw = -((1:Nw)' - 0.5)*dxw;
+    dxf = Lf/Nf;   xf =  ((1:Nf)' - 0.5)*dxf;
+    seed_thickness = min_seed_cells * dxf;
+    seed_time = ((seed_thickness + S0_e)^2) / (4*lam^2*as) - t0_e;
+    seed_time = max(0, seed_time);
+    t_final_phys = max(t_end, seed_time);
+
+    tpe_seed = seed_time + t0_e;
+    den_w_e = 2*sqrt(aw*tpe_seed);
+    den_s_e = 2*sqrt(as*tpe_seed);
+    den_l_e = 2*sqrt(al*tpe_seed);
+    erf_lam = erf(lam);
+    erf_mu  = erf(mu);
+
+    Se_seed = 2*lam*sqrt(as*tpe_seed) - S0_e;
+
+    Tw = Ti + (Ti - Tw_inf) .* erf( (xw - E0_e) ./ den_w_e );
+
+    Tfld = zeros(Nf,1);
+    solid_mask  = xf <= Se_seed;
+    liquid_mask = ~solid_mask;
+    Tfld(solid_mask) = Ti + (Tf - Ti) .* erf( (xf(solid_mask) + S0_e) ./ den_s_e ) ./ erf_lam;
+    Tfld(liquid_mask) = Tl_inf + (Tf - Tl_inf) .* ...
+        ( erf( (xf(liquid_mask) + S0_e) ./ den_l_e ) - 1 ) ./ (erf_mu - 1);
+
+    S_real = min((Nf-1)*dxf, max(dxf, Se_seed));
+    S_seed = S_real;
+
+    seed_info.Se_vam = Se_seed;
+else
     if wall_length_fixed
         Lw = wall_length;
     else
-        Lw = max(wall_length, wall_extent_factor*sqrt(aw*t_final_phys));
+        Lw = max(wall_length, wall_extent_factor*sqrt(aw*max(t_final_phys,1e-16)));
     end
     if fluid_length_fixed
         Lf = fluid_length;
     else
-        Lf = max(fluid_length, fluid_extent_factor*sqrt(max(as,al)*t_final_phys));
+        Lf = max(fluid_length, fluid_extent_factor*sqrt(max(as,al)*max(t_final_phys,1e-16)));
     end
-    dxw = Lw/Nw;   xw = -((1:Nw)' - 0.5)*dxw;  % 0^- at +dxw/2
-    dxf = Lf/Nf;   xf =  ((1:Nf)' - 0.5)*dxf;  % 0^+ at +dxf/2
-
+    dxw = Lw/Nw;   xw = -((1:Nw)' - 0.5)*dxw;
+    dxf = Lf/Nf;   xf =  ((1:Nf)' - 0.5)*dxf;
     seed_thickness = min_seed_cells * dxf;
-    seed_time_new = ((seed_thickness + S0_e)^2) / (4*lam^2*as) - t0_e;
-    seed_time_new = max(0, seed_time_new);
-    t_final_phys = max(t_end, seed_time_new);
+    S_seed = min((Nf-1)*dxf, max(dxf, seed_thickness));
 
-    if abs(seed_time_new - seed_time) < 1e-12
-        seed_time = seed_time_new;
-        break;
-    end
+    Tw = Tw_inf * ones(Nw,1);
+    Tfld = Tl_inf * ones(Nf,1);
+    solid_mask = xf <= S_seed;
+    Tfld(solid_mask) = Tf;
 
-    seed_time = seed_time_new;
+    S_real = S_seed;
+    seed_info.Se_vam = NaN;
 end
 
-seed_time = max(seed_time, 0);
-t_final_phys = max(t_end, seed_time);
-if ~wall_length_fixed
-    wall_length = max(wall_length, wall_extent_factor*sqrt(aw*t_final_phys));
-end
-if ~fluid_length_fixed
-    fluid_length = max(fluid_length, fluid_extent_factor*sqrt(max(as,al)*t_final_phys));
-end
-Lw = wall_length;
-Lf = fluid_length;
-dxw = Lw/Nw;   xw = -((1:Nw)' - 0.5)*dxw;
-dxf = Lf/Nf;   xf =  ((1:Nf)' - 0.5)*dxf;
-seed_thickness = min_seed_cells * dxf;
-seed_time = ((seed_thickness + S0_e)^2) / (4*lam^2*as) - t0_e;
-seed_time = max(0, seed_time);
-t_final_phys = max(t_end, seed_time);
-
-% Evaluate the early-time VAM solution at the seed time for ICs.
-tpe_seed = seed_time + t0_e;
-den_w_e = 2*sqrt(aw*tpe_seed);
-den_s_e = 2*sqrt(as*tpe_seed);
-den_l_e = 2*sqrt(al*tpe_seed);
-erf_lam = erf(lam);
-erf_mu  = erf(mu);
-
-Se_seed = 2*lam*sqrt(as*tpe_seed) - S0_e;
-
-Tw = Ti + (Ti - Tw_inf) .* erf( (xw - E0_e) ./ den_w_e );
-
-Tfld = zeros(Nf,1);
-solid_mask  = xf <= Se_seed;
-liquid_mask = ~solid_mask;
-Tfld(solid_mask) = Ti + (Tf - Ti) .* erf( (xf(solid_mask) + S0_e) ./ den_s_e ) ./ erf_lam;
-Tfld(liquid_mask) = Tl_inf + (Tf - Tl_inf) .* ...
-    ( erf( (xf(liquid_mask) + S0_e) ./ den_l_e ) - 1 ) ./ (erf_mu - 1);
-
-% Ensure the seed matches the targeted thickness; clamp interface inside grid.
-S_real = min((Nf-1)*dxf, max(dxf, Se_seed));
-S_seed = S_real;
-
-seed_info.Se_vam = Se_seed;
 seed_info.time   = seed_time;
-seed_info.thickness = S_seed;
+seed_info.thickness = S_real;
 seed_info.cell_width = dxf;
 
 % Track the physical and relative times separately so we can report a history
@@ -341,25 +376,35 @@ for n = 1:nsteps
     Tfld = Tn;
 
     % ===== Stefan update (one-sided slopes) =====
-    if m >= 2
-        As_ = Tfld(m)   - Tf;  Bs_ = Tfld(m-1) - Tf;
-        grad_s = (Bs_ - 9*As_) / (3*dxf);
-    elseif m >= 1
-        grad_s = coeff.two_over_dx * (Tf - Tfld(m));
-    else
-        grad_s = 0;
+    try
+        ds = update_interface_from_T_gradient(Tfld, xf, m, k_s, k_l, rho_s, L, dt_step);
+    catch err
+        if ~strcmp(err.identifier, 'update_interface_from_T_gradient:IndexError')
+            rethrow(err);
+        end
+
+        if m >= 2
+            As_ = Tfld(m)   - Tf;  Bs_ = Tfld(m-1) - Tf;
+            grad_s = (Bs_ - 9*As_) / (3*dxf);
+        elseif m >= 1
+            grad_s = coeff.two_over_dx * (Tf - Tfld(m));
+        else
+            grad_s = 0;
+        end
+
+        if m+2 <= Nf
+            Al_ = Tfld(m+1) - Tf;  Bl_ = Tfld(m+2) - Tf;
+            grad_l = coeff.grad_upwind * (9*Al_ - Bl_);
+        elseif m+1 <= Nf
+            grad_l = coeff.two_over_dx * (Tfld(m+1) - Tf);
+        else
+            grad_l = 0;
+        end
+
+        ds = dt_step * ( k_s*grad_s - k_l*grad_l ) / (rho_s*L );
     end
 
-    if m+2 <= Nf
-        Al_ = Tfld(m+1) - Tf;  Bl_ = Tfld(m+2) - Tf;
-        grad_l = coeff.grad_upwind * (9*Al_ - Bl_);
-    elseif m+1 <= Nf
-        grad_l = coeff.two_over_dx * (Tfld(m+1) - Tf);
-    else
-        grad_l = 0;
-    end
-
-    S_real = S_real + dt_step * ( k_s*grad_s - k_l*grad_l ) / (rho_s*L);
+    S_real = S_real + ds;
     S_real = min( (Nf-1)*dxf, max( dxf, S_real ) );
 
     % Advance clocks after the state has been updated
@@ -422,6 +467,24 @@ snap.q.t_phys = t_hist + seed_time;
 if flux_window > 1
     snap.q.val = moving_average(snap.q.val, flux_window);
 end
+end
+
+function ds = update_interface_from_T_gradient(T, y, i_s, k_s, k_l, rho_s, L_latent, dt)
+%UPDATE_INTERFACE_FROM_T_GRADIENT Advance interface via one-sided gradients.
+    i_l = i_s + 1;
+    if (i_s - 1) < 1 || (i_l + 1) > numel(T)
+        error('update_interface_from_T_gradient:IndexError', ...
+              'Interface too close to boundary for one-sided gradients.');
+    end
+
+    dy_s = y(i_s)   - y(i_s - 1);
+    dy_l = y(i_l+1) - y(i_l);
+
+    dTdy_s = (T(i_s)   - T(i_s - 1)) / dy_s;
+    dTdy_l = (T(i_l+1) - T(i_l))     / dy_l;
+
+    ds_dt = (k_s * dTdy_s - k_l * dTdy_l) / (rho_s * L_latent);
+    ds = dt * ds_dt;
 end
 
 function coeff = local_coeffs(dt, aw, as, al, dxw, dxf)

@@ -1,107 +1,72 @@
-function plot_flux(caseX, R_c, t_max)
-%PLOT_FLUX Plot interface heat flux histories for VAM and numerical solutions.
-    if nargin<3 || isempty(t_max)
-        if isfield(caseX,'num') && ~isempty(caseX.num)
-            num_struct = caseX.num;
-            if isfield(num_struct,'t')
-                t_max = max(0.1, num_struct.t);
-            elseif isfield(num_struct,'explicit') && isfield(num_struct.explicit,'t')
-                t_max = max(0.1, num_struct.explicit.t);
-            elseif isfield(num_struct,'enthalpy') && isfield(num_struct.enthalpy,'t')
-                t_max = max(0.1, num_struct.enthalpy.t);
-            else
-                t_max = 0.1;
-            end
-        else
-            t_max = 0.1;
-        end
+function plot_flux(caseX, ~, t_max)
+%PLOT_FLUX Plot the explicit interface heat flux history for a case.
+
+    if nargin < 3 || isempty(t_max)
+        t_max = 0.1;
     end
-    Nt = 600;  t = linspace(0,t_max,Nt);
-    p = caseX.params;
 
-    % VAM contact-law fluxes q = (Tw(0^-)-Ts(0^+))/Rc
-    [~,~,q0_rc] = vam_face_temps_and_q(p,'early', t, R_c);
-    [~,~,qI_rc] = vam_face_temps_and_q(p,'late',  t, R_c);
-
-    figure('Name',['Interface flux vs time — ',caseX.label]); hold on; grid on; box on;
-    plot(t, q0_rc, 'k--','LineWidth',1.6, 'DisplayName','VAM^{(0)}: q=\Delta T/R_c');
-    plot(t, qI_rc, 'b-' ,'LineWidth',1.7, 'DisplayName','VAM^{(\infty)}: q=\Delta T/R_c');
-
-    if isfield(caseX,'num') && ~isempty(caseX.num)
-        num_struct = caseX.num;
-        if isfield(num_struct, 'q')
-            [th, qh, seed_t, label] = extract_flux(num_struct, 'Explicit (const R_c)');
-            plot(th, qh, '-', 'LineWidth',1.6, 'Color',[0.95 0.65 0.2], 'DisplayName', label);
-            if seed_t > 0
-                xline(seed_t, 'Color',[0.4 0.4 0.4], 'LineStyle',':', 'LineWidth',1.0, ...
-                    'DisplayName','Seed time (explicit)');
-            end
-            warn_if_flux_unbounded(num_struct, 'explicit flux');
-        else
-            if isfield(num_struct,'explicit')
-                snap_exp = num_struct.explicit;
-                [th, qh, seed_t, label] = extract_flux(snap_exp, 'Explicit (const R_c)');
-                plot(th, qh, '-', 'LineWidth',1.6, 'Color',[0.95 0.65 0.2], 'DisplayName', label);
-                if seed_t > 0
-                    xline(seed_t, 'Color',[0.4 0.4 0.4], 'LineStyle',':', 'LineWidth',1.0, ...
-                        'DisplayName','Seed time (explicit)');
-                end
-                warn_if_flux_unbounded(snap_exp, 'explicit flux');
-            end
-            if isfield(num_struct,'enthalpy')
-                snap_ent = num_struct.enthalpy;
-                [thH, qhH, seedH, labelH] = extract_flux(snap_ent, 'Enthalpy (const R_c)');
-                plot(thH, qhH, '--', 'LineWidth',1.5, 'Color',[0.3 0.75 0.93], 'DisplayName', labelH);
-                if seedH > 0
-                    xline(seedH, 'Color',[0.1 0.5 0.7], 'LineStyle',':', 'LineWidth',1.0, ...
-                        'DisplayName','Seed time (enthalpy)');
-                end
-                warn_if_flux_unbounded(snap_ent, 'enthalpy flux');
-            end
-        end
+    if ~isfield(caseX, 'num') || ~isstruct(caseX.num)
+        warning('plot_flux:NoSnapshot', 'Case %s has no numerical snapshot.', caseX.label);
+        return;
     end
-    xlabel('time t [s]');
-    ylabel('interface heat flux q(0,t) [W m^{-2}]');
-    title(['Interface flux vs time — ', caseX.label]);
-    legend('Location','SouthEast');
+
+    snap = caseX.num;
+    if ~isfield(snap, 'q') || ~isstruct(snap.q)
+        warning('plot_flux:MissingHistory', 'Snapshot lacks flux history for case %s.', caseX.label);
+        return;
+    end
+
+    [times, flux, ~, ~, seed_time] = extract_history(snap);
+    if isempty(flux)
+        warning('plot_flux:EmptyHistory', 'Flux history is empty for case %s.', caseX.label);
+        return;
+    end
+
+    if isempty(t_max)
+        t_max = max(times);
+    else
+        t_max = max(t_max, max(times));
+    end
+
+    figure('Name',['Interface flux vs time — ', caseX.label]); hold on; box on; grid on;
+    plot(times, flux, '-', 'LineWidth', 1.6, 'Color', [0.95 0.65 0.2], 'DisplayName', 'Explicit flux');
+    if seed_time > 0
+        xline(seed_time, 'k:', 'LineWidth', 1.0, 'DisplayName', 'Seed time');
+    end
+    xlabel('time  t  [s]');
+    ylabel('interface heat flux  q  [W m^{-2}]');
+    title(['Explicit interface flux — ', caseX.label]);
+    legend('Location','Best');
     xlim([0, t_max]);
 end
 
-function warn_if_flux_unbounded(snap, label)
-    if ~isstruct(snap)
-        return;
-    end
-    if isfield(snap, 'meta') && isstruct(snap.meta) && isfield(snap.meta, 'bounds')
-        b = snap.meta.bounds;
-        if isstruct(b) && isfield(b,'ok') && ~b.ok
-            flux_violation = NaN;
-            if isfield(b,'flux') && isstruct(b.flux) && isfield(b.flux,'max_violation')
-                flux_violation = b.flux.max_violation;
-            end
-            warning('plot_flux:NotBounded', ...
-                'Numerical %s exceeds VAM flux envelope (Δq=%g W/m^2).', ...
-                label, flux_violation);
+function [times, flux, Tw_face, Ts_face, seed_time] = extract_history(snap)
+    q_struct = snap.q;
+    if isfield(q_struct,'t_phys')
+        times = q_struct.t_phys(:)';
+    elseif isfield(q_struct,'t')
+        if isfield(snap,'t_offset')
+            times = q_struct.t(:)' + snap.t_offset;
+        else
+            times = q_struct.t(:)';
         end
-    end
-end
-
-function [th, qh, seed_t, label] = extract_flux(snap, base_label)
-    if isfield(snap.q, 't_phys')
-        th = snap.q.t_phys;
     else
-        th = snap.q.t;
-        if isfield(snap, 't_offset')
-            th = th + snap.t_offset;
-        end
+        times = linspace(0, snap.t, numel(q_struct.val));
     end
-    qh = snap.q.val;
-    if isfield(snap, 'seed') && isfield(snap.seed, 'time')
-        seed_t = snap.seed.time;
+    flux = q_struct.val(:)';
+    if isfield(q_struct,'Tw_face')
+        Tw_face = q_struct.Tw_face(:)';
     else
-        seed_t = 0;
+        Tw_face = [];
     end
-    label = base_label;
-    if isfield(snap, 'history') && isfield(snap.history, 'flux_window') && snap.history.flux_window > 1
-        label = sprintf('%s (%d-pt mov. avg.)', base_label, snap.history.flux_window);
+    if isfield(q_struct,'Ts_face')
+        Ts_face = q_struct.Ts_face(:)';
+    else
+        Ts_face = [];
+    end
+    if isfield(snap,'seed') && isstruct(snap.seed) && isfield(snap.seed,'time')
+        seed_time = snap.seed.time;
+    else
+        seed_time = 0;
     end
 end

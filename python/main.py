@@ -70,13 +70,15 @@ def main(show_plots: bool = True) -> None:
         print(f"=== {case['label']} ===")
         params = case['params']
         print(f"lambda = {params['lam']:.5f}, Ti = {params['Ti']:.3f} C")
-        for method in ('explicit', 'enthalpy'):
-            snap = case['num'][method]
-            q_hist = snap['q']['val']
-            t_hist = snap['q']['t']
-            final_q = q_hist[-1] if q_hist else float('nan')
-            final_t = t_hist[-1] if t_hist else float('nan')
-            print(f"  {method:9s} : S = {snap['S']:.6f} m at t={final_t:.4f} s, q={final_q:.2f} W/m^2")
+        snap = case['num']
+        q_hist = snap['q']['val']
+        t_hist = snap['q']['t']
+        final_q = q_hist[-1] if q_hist else float('nan')
+        final_t = t_hist[-1] if t_hist else float('nan')
+        print(
+            "  explicit  : S = "
+            f"{snap['S']:.6f} m at t={final_t:.4f} s, q={final_q:.2f} W/m^2"
+        )
         print()
 
     for case in cases:

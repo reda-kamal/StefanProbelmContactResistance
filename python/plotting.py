@@ -61,15 +61,6 @@ def plot_profiles(case: Dict[str, object]) -> None:
                     ax.axvline(explicit['S'], color='m', linestyle='--', linewidth=1.2,
                                label=r'$S^{num}_{exp}$')
                 _warn_if_unbounded(explicit, 'explicit profile')
-            enthalpy = num_struct.get('enthalpy') if isinstance(num_struct, dict) else None
-            if isinstance(enthalpy, dict):
-                ax.plot(list(enthalpy['x']), list(enthalpy['T']), 'o', markersize=4,
-                        markerfacecolor='none', markeredgecolor=(0.3, 0.75, 0.93),
-                        linestyle='none', label='Enthalpy numeric')
-                if 'S' in enthalpy:
-                    ax.axvline(enthalpy['S'], color='c', linestyle='-.', linewidth=1.2,
-                               label=r'$S^{num}_{enth}$')
-                _warn_if_unbounded(enthalpy, 'enthalpy profile')
 
     Tw = params['Tw_inf']
     Tf = params['Tf']
@@ -208,14 +199,6 @@ def plot_flux(case: Dict[str, object], R_c: float, t_max: float | None = None) -
                     ax.axvline(seed_t, color=(0.4, 0.4, 0.4), linestyle=':', linewidth=1.0,
                                label='Seed time (explicit)')
                 _warn_if_flux_unbounded(explicit, 'explicit flux')
-            enthalpy = num_struct.get('enthalpy') if isinstance(num_struct, dict) else None
-            if isinstance(enthalpy, dict):
-                thH, qhH, seedH, labelH = _extract_flux(enthalpy, 'Enthalpy (const R_c)')
-                ax.plot(thH, qhH, '--', linewidth=1.5, color=(0.3, 0.75, 0.93), label=labelH)
-                if seedH > 0:
-                    ax.axvline(seedH, color=(0.1, 0.5, 0.7), linestyle=':', linewidth=1.0,
-                               label='Seed time (enthalpy)')
-                _warn_if_flux_unbounded(enthalpy, 'enthalpy flux')
 
     ax.set_xlabel('time t [s]')
     ax.set_ylabel(r'interface heat flux q(0,t) [W m$^{-2}$]')
@@ -230,10 +213,9 @@ def _infer_tmax(case: Dict[str, object]) -> float | None:
         return None
     if 't' in num_struct:
         return max(0.1, float(num_struct['t']))
-    for key in ('explicit', 'enthalpy'):
-        snap = num_struct.get(key)
-        if isinstance(snap, dict) and 't' in snap:
-            return max(0.1, float(snap['t']))
+    snap = num_struct.get('explicit') if isinstance(num_struct, dict) else None
+    if isinstance(snap, dict) and 't' in snap:
+        return max(0.1, float(snap['t']))
     return None
 
 

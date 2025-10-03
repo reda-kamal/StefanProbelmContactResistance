@@ -8,13 +8,11 @@ try:
     from .stefan_eqs import stefan_eqs
     from .options import get_opt
     from .explicit_stefan_snapshot import explicit_stefan_snapshot
-    from .enthalpy_stefan_snapshot import enthalpy_stefan_snapshot
 except ImportError:  # pragma: no cover - allow running as a loose script
     from numerics import fsolve2  # type: ignore
     from stefan_eqs import stefan_eqs  # type: ignore
     from options import get_opt  # type: ignore
     from explicit_stefan_snapshot import explicit_stefan_snapshot  # type: ignore
-    from enthalpy_stefan_snapshot import enthalpy_stefan_snapshot  # type: ignore
 
 
 class CaseResult(dict):
@@ -120,8 +118,9 @@ def run_vam_case(label: str, k_w: float, rho_w: float, c_w: float,
         'k_w': k_w, 'k_s': k_s, 'k_l': k_l,
     }
 
-    snap_explicit = explicit_stefan_snapshot(k_w, rho_w, c_w, M, R_c, t_phys, params_struct, explicit_opts)
-    snap_enthalpy = enthalpy_stefan_snapshot(k_w, rho_w, c_w, M, R_c, t_phys, params_struct, explicit_opts)
+    snap_explicit = explicit_stefan_snapshot(
+        k_w, rho_w, c_w, M, R_c, t_phys, params_struct, explicit_opts
+    )
 
     out = CaseResult()
     out['label'] = label
@@ -130,7 +129,7 @@ def run_vam_case(label: str, k_w: float, rho_w: float, c_w: float,
     out['Te'] = Te
     out['Tl'] = Tl
     out['Tdiff'] = Tdiff
-    out['num'] = {'explicit': snap_explicit, 'enthalpy': snap_enthalpy}
+    out['num'] = snap_explicit
     return out
 
 
